@@ -468,6 +468,26 @@ function NoteModal({ game, existing, onClose, onSaved }) {
   );
 }
 
+// Lightweight tooltip for mobile cards (no portal needed - cards are in normal flow)
+function MobInfoIcon({ text }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', verticalAlign: 'middle', marginLeft: 3 }}>
+      <span
+        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 13, height: 13, borderRadius: '50%', background: '#2a3042', color: '#8a92a3', fontSize: 8, fontStyle: 'italic', fontWeight: 700, cursor: 'help', flexShrink: 0 }}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onTouchStart={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+      >i</span>
+      {open && (
+        <span style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)', width: 200, background: '#1a1e2b', border: '1px solid #2a3042', color: '#d3d8e2', fontSize: 11, lineHeight: 1.5, padding: '8px 10px', borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,.5)', zIndex: 50, whiteSpace: 'normal', pointerEvents: 'none' }}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
 const CUSTOM_TYPES = ['Parlay', 'Moneyline', 'Teaser', 'Other'];
 
 function CustomPlayModal({ season, week, onClose, onSaved }) {
@@ -578,6 +598,9 @@ export default function Dashboard() {
   const [lockHistory, setLockHistory] = useState(null);
   const [customPlays, setCustomPlays] = useState([]);
   const [showCustomModal, setShowCustomModal] = useState(false);
+  const [mobileSort, setMobileSort] = useState('mss');
+  const [mobilePlaysOnly, setMobilePlaysOnly] = useState(false);
+  const [showMobileTable, setShowMobileTable] = useState(false);
   const [showSeasonStats, setShowSeasonStats] = useState(false);
   const [seasonPicks, setSeasonPicks] = useState(null);
   const [seasonLoading, setSeasonLoading] = useState(false);
@@ -1427,67 +1450,264 @@ export default function Dashboard() {
             </table>
           </div>
 
-          {/* Mobile card list — hidden on desktop via CSS, shown on mobile */}
+          {/* ═══ MOBILE GAME CARDS ═══════════════════════════════════════ */}
           <div className="mobile-game-list">
-            {sorted.map((r) => {
-              const confClass = r.confidence_bin ? r.confidence_bin.toLowerCase().replace(' ', '-') : '';
-              const lineFmt = fmtFavoredLine(r.vegas_line, r.home_team, r.away_team);
-              const cp = consensusPick(r);
-              const hasMyPick = r.pick?.status === 'official';
-              return (
-                <div key={r.id} className={`mgame-card ${r.suggested_play ? 'mgame-play' : ''} ${r.pick?.is_lock ? 'mgame-lock' : ''}`}>
-                  <div className="mgame-top">
-                    <div className="mgame-rank">#{rankByGameId[r.id]}</div>
-                    <div className="mgame-matchup">
-                      <div className="mgame-away">{r.away_team}</div>
-                      <div className="mgame-home">@ {r.home_team}</div>
-                    </div>
-                    <span className={`badge ${confClass}`}>{r.confidence_bin ?? '—'}</span>
-                  </div>
-                  <div className="mgame-meta">
-                    <span>{fmtKickoff(r.kickoff_at)}</span>
-                    {r.tv_network && <span style={{ color: '#5b6272' }}>· {r.tv_network}</span>}
-                  </div>
-                  <div className="mgame-metrics">
-                    <div className="mgame-metric"><span className="mgame-metric-label">Vegas</span><span className="mgame-metric-val">{lineFmt}</span></div>
-                    {r.over_under && <div className="mgame-metric"><span className="mgame-metric-label">O/U</span><span className="mgame-metric-val">{r.over_under}</span></div>}
-                    <div className="mgame-metric">
-                      <span className="mgame-metric-label">Edge</span>
-                      <span className={`mgame-metric-val ${r.edge !== null && Math.abs(parseFloat(r.edge)) >= 1.5 ? 'strong' : ''}`}>
-                        {r.edge != null ? fmtLine(parseFloat(r.edge).toFixed(1)) : '—'}
-                      </span>
-                    </div>
-                    <div className="mgame-metric"><span className="mgame-metric-label">Agree%</span><span className="mgame-metric-val">{r.agreement != null ? `${fmt(r.agreement, 0)}%` : '—'}</span></div>
-                    <div className="mgame-metric"><span className="mgame-metric-label">StdDev</span><span className="mgame-metric-val">{fmt(r.stddev, 2)}</span></div>
-                    <div className="mgame-metric"><span className="mgame-metric-label">MSS</span><span className="mgame-metric-val">{fmt(r.mss, 1)}</span></div>
-                  </div>
-                  {r.suggested_play && cp && (
-                    <div className="mgame-play-badge">★ Model: {cp.team} {fmtLine(fmt(cp.num, 1))}</div>
-                  )}
-                  <div className="mgame-actions">
-                    {hasMyPick ? (
-                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        <button className={`chip ${r.pick.is_lock ? 'chip-lock' : ''}`} onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}>
-                          {r.pick.is_lock && '🔒 '}
-                          {r.pick.pick_type === 'total'
-                            ? `${r.pick.side === 'over' ? 'O' : 'U'} ${r.pick.line_played}`
-                            : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`}
-                        </button>
-                        <button className={`lock-toggle-btn ${r.pick.is_lock ? 'active' : ''}`} onClick={() => toggleLock(r)} title="BRLW Lock">🔒</button>
-                        <button className={`note-btn ${r.pick?.note ? 'has-note' : ''}`} onClick={() => setNoteModalGame(r)}>{r.pick?.note ? '📝' : '+'}</button>
-                      </div>
-                    ) : (
-                      <button className="add-btn" onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}>+</button>
-                    )}
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#8a92a3', cursor: 'pointer' }}>
-                      <input type="checkbox" checked={r.pick?.status === 'lean'} disabled={r.pick?.status === 'official'} onChange={() => toggleLean(r)} />
-                      Lean
-                    </label>
-                  </div>
+
+            {/* Mobile toolbar — sort, filter, table toggle */}
+            <div className="mob-toolbar">
+              <div className="mob-toolbar-left">
+                <div className="mob-sort-wrap">
+                  <span className="mob-tool-label">Sort</span>
+                  <select
+                    className="mob-select"
+                    value={mobileSort}
+                    onChange={(e) => setMobileSort(e.target.value)}
+                  >
+                    <option value="mss">MSS</option>
+                    <option value="kickoff_at">Kickoff</option>
+                    <option value="edge">Edge</option>
+                    <option value="agreement">Agree %</option>
+                    <option value="vegas_line">Vegas Line</option>
+                    <option value="rank">Rank</option>
+                  </select>
                 </div>
-              );
-            })}
-            {sorted.length === 0 && <div className="empty">No games match the current filters.</div>}
+                <button
+                  className={`mob-filter-btn ${mobilePlaysOnly ? 'active' : ''}`}
+                  onClick={() => setMobilePlaysOnly((v) => !v)}
+                >
+                  🎯 My Plays{mobilePlaysOnly ? ' ✓' : ''}
+                </button>
+              </div>
+              <button
+                className="mob-table-btn"
+                onClick={() => setShowMobileTable((v) => !v)}
+              >
+                {showMobileTable ? '📋 Cards' : '📊 Table'}
+              </button>
+            </div>
+
+            {/* Optional full-table view on mobile */}
+            {showMobileTable && (
+              <div className="tbl-wrap-mobile">
+                <p style={{ fontSize: 11, color: '#5b6272', padding: '8px 12px 0', margin: 0 }}>
+                  Scroll horizontally to see all columns
+                </p>
+              </div>
+            )}
+
+            {/* Card list */}
+            {(() => {
+              // Apply mobile-specific sort and filter on top of the desktop sorted list
+              let mobileRows = [...sorted];
+              if (mobilePlaysOnly) mobileRows = mobileRows.filter((r) => r.pick?.status === 'official');
+              mobileRows.sort((a, b) => {
+                if (mobileSort === 'kickoff_at') {
+                  const at = a.kickoff_at ? new Date(a.kickoff_at).getTime() : Infinity;
+                  const bt = b.kickoff_at ? new Date(b.kickoff_at).getTime() : Infinity;
+                  return at - bt;
+                }
+                if (mobileSort === 'rank') return (rankByGameId[a.id] || 99) - (rankByGameId[b.id] || 99);
+                const av = a[mobileSort] != null ? parseFloat(a[mobileSort]) : -Infinity;
+                const bv = b[mobileSort] != null ? parseFloat(b[mobileSort]) : -Infinity;
+                return bv - av; // descending
+              });
+
+              if (mobileRows.length === 0) {
+                return <div className="empty">{mobilePlaysOnly ? 'No official plays this week yet.' : 'No games match the current filters.'}</div>;
+              }
+
+              return mobileRows.map((r) => {
+                const confClass = r.confidence_bin ? r.confidence_bin.toLowerCase().replace(' ', '-') : '';
+                const cp = consensusPick(r);
+                const hasMyPick = r.pick?.status === 'official';
+                const isLock = r.pick?.is_lock;
+                const awayLogo = logos[r.away_team];
+                const homeLogo = logos[r.home_team];
+
+                // Line move indicator
+                const moveVal = r.line_move;
+                const moveStr = moveVal != null && moveVal !== 0
+                  ? (moveVal > 0 ? `▲${Math.abs(moveVal).toFixed(1)}` : `▼${Math.abs(moveVal).toFixed(1)}`)
+                  : null;
+                const moveUp = moveVal != null && moveVal > 0;
+
+                // Vegas display: favored team + spread
+                const vegasNum = r.vegas_line != null ? parseFloat(r.vegas_line) : null;
+                const vegasFavTeam = vegasNum == null ? null : vegasNum > 0 ? r.home_team : vegasNum < 0 ? r.away_team : null;
+                const vegasSpread = vegasNum == null ? '—' : vegasNum === 0 ? "Pick'em" : `-${Math.abs(vegasNum).toFixed(1)}`;
+
+                return (
+                  <div
+                    key={r.id}
+                    className={[
+                      'mgame-card',
+                      r.suggested_play ? 'mgame-play' : '',
+                      isLock ? 'mgame-lock' : '',
+                      hasMyPick && !isLock ? 'mgame-picked' : '',
+                    ].filter(Boolean).join(' ')}
+                  >
+                    {/* ── Card header ──────────────────────────── */}
+                    <div className="mgame-header">
+                      <div className="mgame-rank-badge">#{rankByGameId[r.id]}</div>
+                      <div className="mgame-teams">
+                        <div className="mgame-team-row">
+                          {awayLogo && <img src={awayLogo} alt="" className="mgame-logo" onError={(e) => { e.currentTarget.style.display='none'; }} />}
+                          <span className="mgame-away-name">{r.away_team}</span>
+                          <span className="mgame-at-label">away</span>
+                        </div>
+                        <div className="mgame-team-row">
+                          {homeLogo && <img src={homeLogo} alt="" className="mgame-logo" onError={(e) => { e.currentTarget.style.display='none'; }} />}
+                          <span className="mgame-home-name">{r.home_team}</span>
+                          <span className="mgame-at-label">home</span>
+                        </div>
+                      </div>
+                      <span className={`badge ${confClass}`}>{r.confidence_bin ?? '—'}</span>
+                    </div>
+
+                    {/* ── Kickoff + TV ─────────────────────────── */}
+                    <div className="mgame-meta">
+                      <span>{fmtKickoff(r.kickoff_at)}</span>
+                      {r.tv_network && <span className="mgame-tv">{r.tv_network}</span>}
+                    </div>
+
+                    {/* ── Key metrics grid ─────────────────────── */}
+                    <div className="mgame-metrics">
+
+                      <div className="mgame-metric">
+                        <span className="mgame-metric-label">
+                          Vegas
+                          <MobInfoIcon text="Current market spread. Arrow shows line movement since open." />
+                        </span>
+                        <span className="mgame-metric-val">
+                          {vegasFavTeam ? (
+                            <>{vegasFavTeam} {vegasSpread}</>
+                          ) : '—'}
+                          {moveStr && (
+                            <span className={`mob-move ${moveUp ? 'up' : 'down'}`}> {moveStr}</span>
+                          )}
+                        </span>
+                      </div>
+
+                      {r.over_under != null && (
+                        <div className="mgame-metric">
+                          <span className="mgame-metric-label">
+                            O/U
+                            <MobInfoIcon text="Market total — combined predicted points for both teams." />
+                          </span>
+                          <span className="mgame-metric-val">{r.over_under}</span>
+                        </div>
+                      )}
+
+                      <div className="mgame-metric">
+                        <span className="mgame-metric-label">
+                          Consensus
+                          <MobInfoIcon text="The model's predicted side and spread in standard sportsbook notation. Same direction as the Edge." />
+                        </span>
+                        <span className={`mgame-metric-val ${cp ? 'strong' : ''}`}>
+                          {cp ? `${cp.team} ${fmtLine(fmt(cp.num, 1))}` : '—'}
+                        </span>
+                      </div>
+
+                      <div className="mgame-metric">
+                        <span className="mgame-metric-label">
+                          Edge
+                          <MobInfoIcon text="Consensus minus Vegas line — the core signal. Green means the model strongly disagrees with the market." />
+                        </span>
+                        <span className={`mgame-metric-val ${r.edge !== null && Math.abs(parseFloat(r.edge)) >= 1.5 ? 'strong' : ''}`}>
+                          {r.edge != null ? fmtLine(parseFloat(r.edge).toFixed(1)) : '—'}
+                        </span>
+                      </div>
+
+                      <div className="mgame-metric">
+                        <span className="mgame-metric-label">
+                          Agree%
+                          <MobInfoIcon text="Fraction of Top-K models on the same side as the edge. ≥85% is the qualification threshold." />
+                        </span>
+                        <span className={`mgame-metric-val ${r.agreement != null && r.agreement >= 85 ? 'strong' : ''}`}>
+                          {r.agreement != null ? `${fmt(r.agreement, 0)}%` : '—'}
+                        </span>
+                      </div>
+
+                      <div className="mgame-metric">
+                        <span className="mgame-metric-label">
+                          StdDev
+                          <MobInfoIcon text="Spread of predictions across models. ≤2.5 is the qualification threshold — lower is tighter consensus." />
+                        </span>
+                        <span className={`mgame-metric-val ${r.stddev != null && parseFloat(r.stddev) <= 2.5 ? 'strong' : ''}`}>
+                          {fmt(r.stddev, 2)}
+                        </span>
+                      </div>
+
+                      <div className="mgame-metric">
+                        <span className="mgame-metric-label">
+                          MSS
+                          <MobInfoIcon text="Model Strength Score — composite of edge, agreement, and variance. Higher means a stronger, more reliable signal." />
+                        </span>
+                        <span className="mgame-metric-val">{fmt(r.mss, 1)}</span>
+                      </div>
+
+                    </div>
+
+                    {/* ── Model play banner ────────────────────── */}
+                    {r.suggested_play && cp && (
+                      <div className="mgame-model-play">
+                        <span className="mgame-model-star">★ MODEL PLAY</span>
+                        <span className="mgame-model-pick">{cp.team} {fmtLine(fmt(cp.num, 1))}</span>
+                      </div>
+                    )}
+
+                    {/* ── My Play section ──────────────────────── */}
+                    <div className="mgame-my-play">
+                      <div className="mgame-my-play-label">MY PLAY</div>
+                      {hasMyPick ? (
+                        <div className="mgame-my-play-content">
+                          <div className="mgame-my-play-row">
+                            {isLock && <span className="mgame-lock-tag">🔒 BRLW</span>}
+                            <button
+                              className={`chip ${isLock ? 'chip-lock' : ''}`}
+                              onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}
+                            >
+                              {r.pick.pick_type === 'total'
+                                ? `${r.pick.side === 'over' ? 'Over' : 'Under'} ${r.pick.line_played}`
+                                : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`}
+                              {' · '}{r.pick.units}u
+                            </button>
+                          </div>
+                          <div className="mgame-my-play-actions">
+                            <button
+                              className={`lock-toggle-btn ${isLock ? 'active' : ''}`}
+                              onClick={() => toggleLock(r)}
+                              title={isLock ? 'Remove BRLW Lock' : 'Set as Barney Rubble Lock'}
+                            >🔒</button>
+                            <button
+                              className={`note-btn ${r.pick?.note ? 'has-note' : ''}`}
+                              onClick={() => setNoteModalGame(r)}
+                              title={r.pick?.note ? 'Edit note' : 'Add note'}
+                            >{r.pick?.note ? '📝' : '📓'}</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mgame-my-play-empty">
+                          <button
+                            className="mob-add-play-btn"
+                            onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}
+                          >+ Add Play</button>
+                          <label className="mob-lean-label">
+                            <input
+                              type="checkbox"
+                              checked={r.pick?.status === 'lean'}
+                              onChange={() => toggleLean(r)}
+                            />
+                            Lean
+                          </label>
+                        </div>
+                      )}
+                    </div>
+
+                  </div>
+                );
+              });
+            })()}
           </div>
 
           <div className="print-only-cards">
@@ -1728,18 +1948,64 @@ export default function Dashboard() {
 
         /* ── Mobile game cards ─────────────────────────────────────── */
         .mobile-game-list { display: none; flex-direction: column; gap: 10px; margin-bottom: 16px; }
-        .mgame-card { background: #131722; border: 1px solid #1e2535; border-radius: 10px; padding: 14px; }
-        .mgame-play { border-color: rgba(56,189,148,.3); background: rgba(56,189,148,.04); }
-        .mgame-lock { border-color: rgba(251,191,36,.3); background: rgba(251,191,36,.04); }
-        .mgame-top { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
-        .mgame-rank { font-size: 11px; font-weight: 800; color: #5b6272; min-width: 24px; margin-top: 2px; }
-        .mgame-matchup { flex: 1; }
-        .mgame-away { font-size: 14px; font-weight: 800; color: #e6e9ef; line-height: 1.2; }
-        .mgame-home { font-size: 12px; color: #8a92a3; line-height: 1.4; }
-        .mgame-meta { font-size: 11px; color: #5b6272; margin-bottom: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
-        .mgame-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
-        .mgame-metric { display: flex; flex-direction: column; gap: 2px; }
-        .mgame-metric-label { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: #5b6272; font-weight: 700; }
+
+        /* Toolbar */
+        .mob-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: #131722; border: 1px solid #1e2535; border-radius: 10px; padding: 10px 12px; margin-bottom: 4px; }
+        .mob-toolbar-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .mob-tool-label { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #5b6272; font-weight: 700; }
+        .mob-select { background: #0b0e14; border: 1px solid #2a3042; color: #e6e9ef; padding: 5px 8px; border-radius: 6px; font-size: 12px; font-family: inherit; }
+        .mob-sort-wrap { display: flex; align-items: center; gap: 6px; }
+        .mob-filter-btn { background: #0b0e14; border: 1px solid #2a3042; color: #8a92a3; padding: 5px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+        .mob-filter-btn.active { background: rgba(56,189,148,.15); border-color: rgba(56,189,148,.4); color: #38bd94; }
+        .mob-table-btn { background: #0b0e14; border: 1px solid #2a3042; color: #8a92a3; padding: 5px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+        .mob-table-btn:hover { border-color: #38bd94; color: #38bd94; }
+
+        /* Cards */
+        .mgame-card { background: #131722; border: 1px solid #1e2535; border-radius: 12px; padding: 14px; }
+        .mgame-play { border-color: rgba(56,189,148,.35); background: rgba(56,189,148,.04); }
+        .mgame-lock { border-color: rgba(251,191,36,.4); background: rgba(251,191,36,.04); }
+        .mgame-picked { border-color: rgba(37,99,235,.35); }
+
+        /* Header */
+        .mgame-header { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
+        .mgame-rank-badge { background: #0b0e14; border: 1px solid #2a3042; border-radius: 6px; padding: 2px 6px; font-size: 10px; font-weight: 800; color: #8a92a3; white-space: nowrap; margin-top: 2px; flex-shrink: 0; }
+        .mgame-teams { flex: 1; }
+        .mgame-team-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+        .mgame-logo { width: 18px; height: 18px; object-fit: contain; flex-shrink: 0; }
+        .mgame-away-name { font-size: 15px; font-weight: 800; color: #e6e9ef; line-height: 1.1; }
+        .mgame-home-name { font-size: 13px; font-weight: 600; color: #b8bfcc; line-height: 1.1; }
+        .mgame-at-label { font-size: 9px; color: #3a404e; text-transform: uppercase; font-weight: 700; margin-left: 2px; }
+
+        /* Meta */
+        .mgame-meta { font-size: 11px; color: #5b6272; margin-bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+        .mgame-tv { background: #0b0e14; border: 1px solid #2a3042; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: 700; color: #8a92a3; }
+
+        /* Metrics grid */
+        .mgame-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 8px; margin-bottom: 12px; padding: 10px 0; border-top: 1px solid #1e2535; border-bottom: 1px solid #1e2535; }
+        .mgame-metric { display: flex; flex-direction: column; gap: 3px; }
+        .mgame-metric-label { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: #5b6272; font-weight: 700; display: flex; align-items: center; gap: 2px; }
+        .mgame-metric-val { font-size: 13px; font-weight: 700; color: #e6e9ef; line-height: 1.2; }
+        .mgame-metric-val.strong { color: #38bd94; }
+        .mob-move { font-size: 10px; font-weight: 700; }
+        .mob-move.up { color: #38bd94; }
+        .mob-move.down { color: #f87171; }
+
+        /* Model play banner */
+        .mgame-model-play { display: flex; align-items: center; gap: 8px; background: rgba(56,189,148,.1); border: 1px solid rgba(56,189,148,.25); border-radius: 8px; padding: 7px 10px; margin-bottom: 10px; }
+        .mgame-model-star { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: #38bd94; white-space: nowrap; }
+        .mgame-model-pick { font-size: 13px; font-weight: 800; color: #38bd94; }
+
+        /* My Play section */
+        .mgame-my-play { border-top: 1px solid #1e2535; padding-top: 10px; margin-top: 2px; }
+        .mgame-my-play-label { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: #3a404e; margin-bottom: 6px; }
+        .mgame-my-play-content { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .mgame-my-play-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .mgame-lock-tag { font-size: 10px; font-weight: 800; color: #fbbf24; white-space: nowrap; }
+        .mgame-my-play-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+        .mgame-my-play-empty { display: flex; align-items: center; gap: 10px; }
+        .mob-add-play-btn { background: transparent; border: 1px dashed #2a3042; color: #8a92a3; border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+        .mob-add-play-btn:hover { border-color: #38bd94; color: #38bd94; }
+        .mob-lean-label { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #5b6272; cursor: pointer; }
         .mgame-metric-val { font-size: 13px; font-weight: 700; color: #e6e9ef; }
         .mgame-metric-val.strong { color: #38bd94; }
         .mgame-play-badge { font-size: 12px; font-weight: 700; color: #38bd94; background: rgba(56,189,148,.1); border: 1px solid rgba(56,189,148,.25); border-radius: 6px; padding: 5px 10px; margin-bottom: 10px; }
