@@ -493,6 +493,7 @@ export default function Dashboard() {
   const [noteModalGame, setNoteModalGame] = useState(null);
 
   const [showMyCard, setShowMyCard] = useState(false);
+  const [lockHistory, setLockHistory] = useState(null);
   const [showSeasonStats, setShowSeasonStats] = useState(false);
   const [seasonPicks, setSeasonPicks] = useState(null);
   const [seasonLoading, setSeasonLoading] = useState(false);
@@ -596,10 +597,13 @@ export default function Dashboard() {
   async function loadSeasonStats() {
     setSeasonLoading(true);
     try {
-      const url = `${SUPABASE_URL}/rest/v1/user_picks?select=*,games!inner(season,home_team,away_team,home_score,away_score,status,closing_line)&status=eq.official&games.status=eq.final&games.season=eq.${season}`;
-      const res = await fetch(url, { headers: SB_HEADERS });
-      const data = res.ok ? await res.json() : [];
-      setSeasonPicks(data);
+      const [seasonRes, lockRes] = await Promise.all([
+        fetch(`${SUPABASE_URL}/rest/v1/user_picks?select=*,games!inner(season,home_team,away_team,home_score,away_score,status,closing_line)&status=eq.official&games.status=eq.final&games.season=eq.${season}`, { headers: SB_HEADERS }),
+        // Load ALL lock picks across all seasons for the BRLW history table
+        fetch(`${SUPABASE_URL}/rest/v1/user_picks?select=*,games(season,week,home_team,away_team,home_score,away_score,status)&is_lock=eq.true&order=games(season).desc,games(week).desc&limit=50`, { headers: SB_HEADERS }),
+      ]);
+      setSeasonPicks(seasonRes.ok ? await seasonRes.json() : []);
+      setLockHistory(lockRes.ok ? await lockRes.json() : []);
     } finally {
       setSeasonLoading(false);
     }
@@ -607,6 +611,29 @@ export default function Dashboard() {
 
   function refreshAfterPickChange() {
     setPickModalGame(null);
+    loadWeek();
+    if (showSeasonStats) loadSeasonStats();
+  }
+
+  async function toggleLock(row) {
+    if (row.pick?.status !== 'official') return;
+    const isNowLock = !row.pick.is_lock;
+    // If setting a new lock, clear any existing lock for this week first
+    if (isNowLock) {
+      const existingLock = flat.find((r) => r.pick?.is_lock && r.id !== row.id);
+      if (existingLock?.pick?.id) {
+        await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${existingLock.pick.id}`, {
+          method: 'PATCH',
+          headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+          body: JSON.stringify({ is_lock: false }),
+        });
+      }
+    }
+    await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${row.pick.id}`, {
+      method: 'PATCH',
+      headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+      body: JSON.stringify({ is_lock: isNowLock }),
+    });
     loadWeek();
     if (showSeasonStats) loadSeasonStats();
   }
@@ -776,6 +803,21 @@ export default function Dashboard() {
     return out;
   }, [myCardPicksAll, cardConfFilter, cardTypeFilter]);
 
+  const lockPick = useMemo(() => flat.find((r) => r.pick?.is_lock), [flat]);
+
+  const lockRecord = useMemo(() => {
+    if (!lockHistory) return null;
+    let w = 0, l = 0, p = 0;
+    for (const lp of lockHistory) {
+      const g = lp.games;
+      const result = gradePick(lp, g);
+      if (result === 'win') w++;
+      else if (result === 'loss') l++;
+      else if (result === 'push') p++;
+    }
+    return { w, l, p, history: lockHistory };
+  }, [lockHistory]);
+
   const seasonRecord = useMemo(() => {
     if (!seasonPicks) return null;
     let w = 0, l = 0, p = 0, unitsNet = 0;
@@ -842,28 +884,46 @@ export default function Dashboard() {
           </div>
           {myCardPicksAll.length === 0 ? (
             <p className="empty-note">No official plays saved for this week yet. Click the + in the My Play column to add one.</p>
-          ) : myCardPicks.length === 0 ? (
-            <p className="empty-note">No plays match these filters.</p>
           ) : (
-            <div className="card-list">
-              {myCardPicks.map((r) => {
-                const result = r.status === 'final' ? gradePick(r.pick, r) : null;
-                const clv = computeCLV(r.pick, r);
-                const label =
-                  r.pick.pick_type === 'total'
-                    ? `${r.pick.side === 'over' ? 'Over' : 'Under'} ${r.pick.line_played}`
-                    : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`;
-                return (
-                  <div key={r.id} className="card-item">
-                    <div>
-                      <div className="card-matchup">{r.matchup}</div>
-                      <div className="card-pick">{label} · {r.pick.units}u{clv !== null ? ` · CLV ${clv >= 0 ? '+' : ''}${clv.toFixed(1)}` : ''}</div>
-                    </div>
-                    {result && <span className={`result-badge ${result}`}>{result}</span>}
-                  </div>
-                );
-              })}
-            </div>
+            <>
+              {/* BRLW Lock — shown at top of My Card if set */}
+              {lockPick && (
+                <div className="brlw-banner">
+                  <span className="brlw-label">🔒 Barney Rubble Lock of the Week</span>
+                  <span className="brlw-pick">
+                    {lockPick.pick.pick_type === 'total'
+                      ? `${lockPick.pick.side === 'over' ? 'Over' : 'Under'} ${lockPick.pick.line_played}`
+                      : `${lockPick.pick.side === 'home' ? lockPick.home_team : lockPick.away_team} ${fmtLine(spreadForSide(lockPick.pick.line_played, lockPick.pick.side))}`}
+                    {' '}· {lockPick.pick.units}u
+                  </span>
+                  <span className="brlw-matchup">{lockPick.matchup}</span>
+                  {(() => { const res = lockPick.status === 'final' ? gradePick(lockPick.pick, lockPick) : null; return res ? <span className={`result-badge ${res}`}>{res}</span> : null; })()}
+                </div>
+              )}
+              {myCardPicks.length === 0 ? (
+                <p className="empty-note">No plays match these filters.</p>
+              ) : (
+                <div className="card-list">
+                  {myCardPicks.map((r) => {
+                    const result = r.status === 'final' ? gradePick(r.pick, r) : null;
+                    const clv = computeCLV(r.pick, r);
+                    const label =
+                      r.pick.pick_type === 'total'
+                        ? `${r.pick.side === 'over' ? 'Over' : 'Under'} ${r.pick.line_played}`
+                        : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`;
+                    return (
+                      <div key={r.id} className={`card-item ${r.pick.is_lock ? 'card-item-lock' : ''}`}>
+                        <div>
+                          <div className="card-matchup">{r.pick.is_lock && '🔒 '}{r.matchup}</div>
+                          <div className="card-pick">{label} · {r.pick.units}u{clv !== null ? ` · CLV ${clv >= 0 ? '+' : ''}${clv.toFixed(1)}` : ''}</div>
+                        </div>
+                        {result && <span className={`result-badge ${result}`}>{result}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -888,6 +948,61 @@ export default function Dashboard() {
           )}
           {!seasonLoading && seasonRecord && seasonRecord.total === 0 && (
             <p className="empty-note">No graded official plays yet this season — results populate once games go final.</p>
+          )}
+
+          {/* BRLW History */}
+          {!seasonLoading && lockRecord && (
+            <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #232838' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
+                <h3 style={{ margin: 0, fontSize: 14, color: '#e6e9ef' }}>🔒 Barney Rubble Lock of the Week — All Time</h3>
+                <span className="stat-num" style={{ fontSize: 18, color: lockRecord.w >= lockRecord.l ? '#38bd94' : '#f87171' }}>
+                  {lockRecord.w}–{lockRecord.l}{lockRecord.p ? `–${lockRecord.p}` : ''}
+                </span>
+                {(lockRecord.w + lockRecord.l) > 0 && (
+                  <span className="stat-label" style={{ fontSize: 13, color: '#8a92a3' }}>
+                    {((lockRecord.w / (lockRecord.w + lockRecord.l)) * 100).toFixed(1)}% win rate
+                  </span>
+                )}
+              </div>
+              {lockRecord.history.length === 0 ? (
+                <p className="empty-note">No locks designated yet. Click 🔒 next to any official play to set it as the Barney Rubble Lock.</p>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead>
+                      <tr>
+                        {['Season', 'Wk', 'Matchup', 'Pick', 'Result'].map(h => (
+                          <th key={h} style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #232838', color: '#5b6272', textTransform: 'uppercase', fontSize: 11, letterSpacing: '.04em' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {lockRecord.history.map((lp) => {
+                        const g = lp.games;
+                        const result = g ? gradePick(lp, g) : null;
+                        const pickLabel = lp.pick_type === 'total'
+                          ? `${lp.side === 'over' ? 'Over' : 'Under'} ${lp.line_played}`
+                          : `${lp.side === 'home' ? g?.home_team : g?.away_team} ${fmtLine(spreadForSide(lp.line_played, lp.side))}`;
+                        const resultColor = result === 'win' ? '#38bd94' : result === 'loss' ? '#f87171' : '#94a3b8';
+                        return (
+                          <tr key={lp.id} style={{ borderBottom: '1px solid #1a1e2b' }}>
+                            <td style={{ padding: '7px 10px', color: '#8a92a3' }}>{g?.season ?? '—'}</td>
+                            <td style={{ padding: '7px 10px', color: '#8a92a3' }}>{g ? `Wk ${lp.games?.week ?? '?'}` : '—'}</td>
+                            <td style={{ padding: '7px 10px' }}>{g ? `${g.away_team} @ ${g.home_team}` : '—'}</td>
+                            <td style={{ padding: '7px 10px', fontWeight: 600 }}>{g ? pickLabel : '—'}</td>
+                            <td style={{ padding: '7px 10px' }}>
+                              {result
+                                ? <span className={`result-badge ${result}`}>{result}</span>
+                                : <span style={{ color: '#5b6272', fontSize: 11 }}>{g?.status === 'final' ? 'Push?' : 'Pending'}</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -995,11 +1110,19 @@ export default function Dashboard() {
                     </td>
                     <td className="center no-print">
                       {r.pick?.status === 'official' ? (
-                        <button className="chip" onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}>
-                          {r.pick.pick_type === 'total'
-                            ? `${r.pick.side === 'over' ? 'O' : 'U'} ${r.pick.line_played}`
-                            : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`} {r.pick.units}u
-                        </button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'center' }}>
+                          <button className={`chip ${r.pick.is_lock ? 'chip-lock' : ''}`} onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}>
+                            {r.pick.is_lock && '🔒 '}
+                            {r.pick.pick_type === 'total'
+                              ? `${r.pick.side === 'over' ? 'O' : 'U'} ${r.pick.line_played}`
+                              : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`} {r.pick.units}u
+                          </button>
+                          <button
+                            className={`lock-toggle-btn ${r.pick.is_lock ? 'active' : ''}`}
+                            onClick={() => toggleLock(r)}
+                            title={r.pick.is_lock ? 'Remove as BRLW Lock' : 'Set as Barney Rubble Lock of the Week'}
+                          >🔒</button>
+                        </div>
                       ) : (
                         <button className="add-btn" onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}>+</button>
                       )}
@@ -1236,6 +1359,15 @@ export default function Dashboard() {
         .note-btn { width: 26px; height: 26px; border-radius: 6px; border: 1px solid transparent; background: transparent; cursor: pointer; font-size: 13px; color: #5b6272; }
         .note-btn.has-note { color: #facc15; }
         .note-btn:hover { border-color: #2a3042; }
+        .lock-toggle-btn { width: 22px; height: 22px; border-radius: 4px; border: 1px solid transparent; background: transparent; cursor: pointer; font-size: 12px; opacity: 0.25; transition: opacity .15s, background .15s; padding: 0; line-height: 1; }
+        .lock-toggle-btn:hover { opacity: 0.7; background: rgba(251,191,36,0.1); }
+        .lock-toggle-btn.active { opacity: 1; background: rgba(251,191,36,0.15); border-color: rgba(251,191,36,0.4); }
+        .chip-lock { background: rgba(251,191,36,0.15); color: #fbbf24; border: 1px solid rgba(251,191,36,0.35); }
+        .card-item-lock { border-color: rgba(251,191,36,0.3) !important; background: rgba(251,191,36,0.05) !important; }
+        .brlw-banner { display: flex; align-items: center; gap: 12px; background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.3); border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; flex-wrap: wrap; }
+        .brlw-label { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: #fbbf24; white-space: nowrap; }
+        .brlw-pick { font-size: 14px; font-weight: 700; color: #fbbf24; }
+        .brlw-matchup { font-size: 12px; color: #8a92a3; }
       `}</style>
     </div>
   );
