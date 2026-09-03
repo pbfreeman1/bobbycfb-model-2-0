@@ -303,21 +303,33 @@ function PickModal({ game, existing, defaultStatus, onClose, onSaved, onDeleted 
       units,
       status,
     };
-    await fetch(`${SUPABASE_URL}/rest/v1/user_picks?on_conflict=game_id`, {
-      method: 'POST',
-      headers: { ...SB_HEADERS, Prefer: 'resolution=merge-duplicates,return=representation' },
-      body: JSON.stringify(body),
-    });
+    // If editing an existing pick, PATCH it by id; otherwise INSERT new.
+    if (existing?.id) {
+      await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${existing.id}`, {
+        method: 'PATCH',
+        headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+        body: JSON.stringify(body),
+      });
+    } else {
+      await fetch(`${SUPABASE_URL}/rest/v1/user_picks`, {
+        method: 'POST',
+        headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+        body: JSON.stringify(body),
+      });
+    }
     setSaving(false);
     onSaved();
   }
 
   async function handleDelete() {
     setSaving(true);
-    await fetch(`${SUPABASE_URL}/rest/v1/user_picks?game_id=eq.${game.id}`, {
-      method: 'DELETE',
-      headers: SB_HEADERS,
-    });
+    const deleteId = existing?.id;
+    if (deleteId) {
+      await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${deleteId}`, {
+        method: 'DELETE',
+        headers: SB_HEADERS,
+      });
+    }
     setSaving(false);
     onDeleted();
   }
@@ -414,11 +426,19 @@ function NoteModal({ game, existing, onClose, onSaved }) {
 
   async function handleSave() {
     setSaving(true);
-    await fetch(`${SUPABASE_URL}/rest/v1/user_picks?on_conflict=game_id`, {
-      method: 'POST',
-      headers: { ...SB_HEADERS, Prefer: 'resolution=merge-duplicates,return=representation' },
-      body: JSON.stringify({ game_id: game.id, note: text }),
-    });
+    if (game.pick?.id) {
+      await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${game.pick.id}`, {
+        method: 'PATCH',
+        headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+        body: JSON.stringify({ note: text }),
+      });
+    } else {
+      await fetch(`${SUPABASE_URL}/rest/v1/user_picks`, {
+        method: 'POST',
+        headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+        body: JSON.stringify({ game_id: game.id, note: text }),
+      });
+    }
     setSaving(false);
     onSaved(text);
   }
@@ -731,14 +751,14 @@ export default function Dashboard() {
   async function toggleLean(row) {
     if (row.pick?.status === 'official') return;
     if (row.pick?.status === 'lean') {
-      await fetch(`${SUPABASE_URL}/rest/v1/user_picks?game_id=eq.${row.id}`, { method: 'DELETE', headers: SB_HEADERS });
+      if (row.pick?.id) await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${row.pick.id}`, { method: 'DELETE', headers: SB_HEADERS });
     } else {
       const side = row.suggested_side || 'home';
       // line_played is always the game's single stored line, same as PickModal.
       const line = row.vegas_line != null ? parseFloat(row.vegas_line) : null;
-      await fetch(`${SUPABASE_URL}/rest/v1/user_picks?on_conflict=game_id`, {
+      await fetch(`${SUPABASE_URL}/rest/v1/user_picks`, {
         method: 'POST',
-        headers: { ...SB_HEADERS, Prefer: 'resolution=merge-duplicates,return=representation' },
+        headers: { ...SB_HEADERS, Prefer: 'return=representation' },
         body: JSON.stringify({
           game_id: row.id, game_metrics_id: row.game_metrics_id, played: true,
           pick_type: 'spread', side, line_played: line, units: 1, status: 'lean',
