@@ -468,6 +468,88 @@ function NoteModal({ game, existing, onClose, onSaved }) {
   );
 }
 
+const CUSTOM_TYPES = ['Parlay', 'Moneyline', 'Teaser', 'Other'];
+
+function CustomPlayModal({ season, week, onClose, onSaved }) {
+  const ref = useRef(null);
+  useOutsideClose(ref, onClose);
+  const [label, setLabel] = useState('');
+  const [type, setType] = useState('Parlay');
+  const [units, setUnits] = useState(1);
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (!label.trim()) return;
+    setSaving(true);
+    await fetch(`${SUPABASE_URL}/rest/v1/user_picks`, {
+      method: 'POST',
+      headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+      body: JSON.stringify({
+        is_custom: true,
+        custom_label: label.trim(),
+        custom_type: type.toLowerCase(),
+        units: parseFloat(units) || 1,
+        season,
+        week,
+        played: true,
+        status: 'official',
+        pick_type: 'spread',
+      }),
+    });
+    setSaving(false);
+    onSaved();
+  }
+
+  return createPortal(
+    <div className="overlay">
+      <div className="modal" ref={ref}>
+        <h3>Add Custom Play — Week {week}</h3>
+        <div className="modal-field">
+          <label>Label</label>
+          <input
+            autoFocus
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && !saving && label.trim() && handleSave()}
+            placeholder="e.g. Alabama ML + Georgia ML parlay"
+          />
+        </div>
+        <div className="modal-field">
+          <label>Type</label>
+          <select value={type} onChange={(e) => setType(e.target.value)}>
+            {CUSTOM_TYPES.map((t) => <option key={t}>{t}</option>)}
+          </select>
+        </div>
+        <div className="modal-field">
+          <label>Units</label>
+          <input type="number" min="0.5" max="10" step="0.5" value={units} onChange={(e) => setUnits(e.target.value)} style={{ width: 80 }} />
+        </div>
+        <div className="actions">
+          <button className="ghost" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="primary" onClick={handleSave} disabled={saving || !label.trim()}>
+            {saving ? 'Saving…' : 'Add Play'}
+          </button>
+        </div>
+        <style jsx>{`
+          .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+          .modal { background: #131722; border: 1px solid #2a3042; border-radius: 12px; padding: 20px; width: 380px; max-width: 90vw; }
+          h3 { margin: 0 0 16px; font-size: 15px; color: #e6e9ef; }
+          .modal-field { margin-bottom: 12px; display: flex; flex-direction: column; gap: 5px; }
+          .modal-field label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #8a92a3; }
+          .modal-field input, .modal-field select { background: #0b0e14; border: 1px solid #2a3042; border-radius: 8px; color: #e6e9ef; padding: 8px 10px; font-size: 13px; font-family: inherit; width: 100%; }
+          .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+          .actions button { padding: 8px 16px; border-radius: 6px; font-size: 13px; cursor: pointer; border: 1px solid #2a3042; font-family: inherit; }
+          .primary { background: #38bd94; color: #0b0e14; border-color: #38bd94; font-weight: 700; }
+          .primary:disabled { opacity: 0.5; cursor: not-allowed; }
+          .ghost { background: transparent; color: #8a92a3; }
+        `}</style>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 export default function Dashboard() {
   const [season, setSeason] = useState(2026);
   const [week, setWeek] = useState(1);
@@ -494,6 +576,8 @@ export default function Dashboard() {
 
   const [showMyCard, setShowMyCard] = useState(false);
   const [lockHistory, setLockHistory] = useState(null);
+  const [customPlays, setCustomPlays] = useState([]);
+  const [showCustomModal, setShowCustomModal] = useState(false);
   const [showSeasonStats, setShowSeasonStats] = useState(false);
   const [seasonPicks, setSeasonPicks] = useState(null);
   const [seasonLoading, setSeasonLoading] = useState(false);
@@ -508,9 +592,11 @@ export default function Dashboard() {
       const gamesUrl = `${SUPABASE_URL}/rest/v1/games?select=id,home_team,away_team,kickoff_at,current_line,opening_line,closing_line,over_under,tv_network,status,home_score,away_score,game_metrics(id,vegas_line,consensus_spread,edge,agreement,stddev,mss,confidence_bin,suggested_play,suggested_side,suggested_line,valid_model_count,actual_k,topk_model_ids)&season=eq.${season}&week=eq.${week}`;
       const logosUrl = `${SUPABASE_URL}/rest/v1/team_logos?select=team_name,logo_url`;
 
-      const [gamesRes, logosRes] = await Promise.all([
+      const customUrl = `${SUPABASE_URL}/rest/v1/user_picks?select=*&is_custom=eq.true&season=eq.${season}&week=eq.${week}&order=created_at.asc`;
+      const [gamesRes, logosRes, customRes] = await Promise.all([
         fetch(gamesUrl, { headers: SB_HEADERS }),
         fetch(logosUrl, { headers: SB_HEADERS }),
+        fetch(customUrl, { headers: SB_HEADERS }),
       ]);
       if (!gamesRes.ok) throw new Error(`Supabase error ${gamesRes.status}`);
       const gamesData = await gamesRes.json();
@@ -583,6 +669,7 @@ export default function Dashboard() {
       setLogos(logoMap);
       setRanges(rangeByGame);
       setAgreementAll(agreementAllByGame);
+      setCustomPlays(customRes.ok ? await customRes.json() : []);
     } catch (e) {
       setError(String(e.message || e));
     } finally {
@@ -775,6 +862,24 @@ export default function Dashboard() {
     else { setSortKey(key); setSortDir('desc'); }
   }
 
+  async function deleteCustomPlay(id) {
+    await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${id}`, {
+      method: 'DELETE',
+      headers: SB_HEADERS,
+    });
+    loadWeek();
+  }
+
+  async function setCustomResult(id, result) {
+    await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${id}`, {
+      method: 'PATCH',
+      headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+      body: JSON.stringify({ result }),
+    });
+    loadWeek();
+    if (showSeasonStats) loadSeasonStats();
+  }
+
   async function toggleLean(row) {
     if (row.pick?.status === 'official') return;
     if (row.pick?.status === 'lean') {
@@ -855,6 +960,9 @@ export default function Dashboard() {
             >
               Season Stats
             </button>
+            <button className="toggle-btn" onClick={() => setShowCustomModal(true)}>
+              + Custom Play
+            </button>
             <button className="toggle-btn print-btn" onClick={() => window.print()}>
               🖨️ Print
             </button>
@@ -924,6 +1032,51 @@ export default function Dashboard() {
                 </div>
               )}
             </>
+          )}
+          {/* Custom Plays section */}
+          {(customPlays.length > 0 || showMyCard) && (
+            <div style={{ marginTop: customPlays.length > 0 || myCardPicksAll.length > 0 ? 16 : 0, paddingTop: customPlays.length > 0 || myCardPicksAll.length > 0 ? 14 : 0, borderTop: customPlays.length > 0 || myCardPicksAll.length > 0 ? '1px solid #232838' : 'none' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', color: '#8a92a3' }}>
+                  Custom Plays {customPlays.length > 0 && <span className="count-badge">{customPlays.length}</span>}
+                </span>
+                <button className="toggle-btn" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => setShowCustomModal(true)}>+ Add</button>
+              </div>
+              {customPlays.length === 0 ? (
+                <p className="empty-note" style={{ margin: 0 }}>No custom plays this week. Use "+ Custom Play" to add a parlay, moneyline, or other bet.</p>
+              ) : (
+                <div className="card-list">
+                  {customPlays.map((cp) => {
+                    const typeLabel = cp.custom_type ? cp.custom_type.charAt(0).toUpperCase() + cp.custom_type.slice(1) : 'Custom';
+                    return (
+                      <div key={cp.id} className="card-item" style={{ gap: 8 }}>
+                        <div style={{ flex: 1 }}>
+                          <div className="card-matchup">{cp.custom_label}</div>
+                          <div className="card-pick">{typeLabel} · {cp.units}u</div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                          {['win','loss','push'].map((r) => (
+                            <button
+                              key={r}
+                              onClick={() => setCustomResult(cp.id, cp.result === r ? null : r)}
+                              style={{
+                                padding: '3px 8px', borderRadius: 12, border: '1px solid',
+                                fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                                background: cp.result === r ? (r === 'win' ? 'rgba(56,189,148,.2)' : r === 'loss' ? 'rgba(248,113,113,.2)' : 'rgba(148,163,184,.2)') : 'transparent',
+                                color: cp.result === r ? (r === 'win' ? '#38bd94' : r === 'loss' ? '#f87171' : '#94a3b8') : '#5b6272',
+                                borderColor: cp.result === r ? (r === 'win' ? 'rgba(56,189,148,.4)' : r === 'loss' ? 'rgba(248,113,113,.4)' : 'rgba(148,163,184,.4)') : '#2a3042',
+                                textTransform: 'uppercase',
+                              }}
+                            >{r}</button>
+                          ))}
+                          <button className="note-btn" onClick={() => deleteCustomPlay(cp.id)} title="Remove play" style={{ color: '#f87171', fontSize: 12 }}>✕</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -1194,6 +1347,14 @@ export default function Dashboard() {
         </>
       )}
 
+      {showCustomModal && (
+        <CustomPlayModal
+          season={season}
+          week={week}
+          onClose={() => setShowCustomModal(false)}
+          onSaved={() => { setShowCustomModal(false); loadWeek(); }}
+        />
+      )}
       {pickModalGame && (
         <PickModal
           game={pickModalGame}
