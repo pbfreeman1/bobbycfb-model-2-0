@@ -51,10 +51,10 @@ const TOOLTIPS = {
   range: 'The spread between the most bullish and most bearish top-model prediction (max − min). A tight range means all the top models are in the same neighborhood; a wide range can mean one outlier is skewing StdDev without the whole group actually disagreeing.',
   mss: 'Model Strength Score — a composite confidence score combining edge size, agreement, and variance. Higher MSS means a stronger, more reliable signal.',
   confidence_bin: 'A qualitative bucket (Very Strong → Very Weak) derived from MSS, for quick scanning. The backtested qualification filter (Edge ≥1.5, StdDev ≤2.5, Agreement ≥85%) is what actually flags a Model Play — not this bucket alone.',
-  suggested_play: 'Whether this game passes the backtested qualification filter (Edge ≥1.5, StdDev ≤2.5, Agreement ≥85%), which historically hit ~58% ATS across 2021–2025 backtesting. This is the model's pick, separate from your own.',
+  suggested_play: 'Whether this game passes the backtested qualification filter (Edge ≥1.5, StdDev ≤2.5, Agreement ≥85%), which historically hit ~58% ATS across 2021–2025 backtesting. This is the model’s pick, separate from your own.',
   valid_model_count: 'How many of the ~30+ source systems submitted a usable prediction for this game.',
   tv_network: 'Broadcast network airing the game, where available.',
-  lean: 'A quick, informal flag for games you're leaning toward but haven't committed to. Not counted in your official season record.',
+  lean: 'A quick, informal flag for games you’re leaning toward but haven’t committed to. Not counted in your official season record.',
   play: 'Your official play for this game — the side, bet type, and unit size you're actually tracking for season results.',
   notes: 'Your private notes on this game — injuries, weather, anything worth remembering.',
 };
