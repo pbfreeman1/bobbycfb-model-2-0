@@ -1,420 +1,1213 @@
 'use client';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { sbFetch, fmt, fmtLine, fmtKickoff, CONFIDENCE_ORDER, CONF_BADGE_CLASS } from '../lib/supabase';
 
-// ─── tooltips ────────────────────────────────────────────────────────────────
-const TIPS = {
-  matchup: 'Away team @ home team. Click any row for full game detail.',
-  kickoff_at: 'Scheduled kickoff in Eastern Time. "TBD" until CFBD data is loaded.',
-  vegas_line: 'Current market spread. Positive = home favored (BobbyCFB sign convention). Use ATS filters to find games where the home team is favored by a specific range.',
-  over_under: 'Market total from CFBD lines data. Use the O/U filter to find games with a specific total range.',
-  consensus_spread: "BobbyCFB's weighted-average predicted spread from the Top-7 ranked models.",
-  edge: 'Consensus minus Vegas line. This is the core signal — the model\'s disagreement with the market.',
-  agreement: 'Percentage of Top-7 models agreeing on the favored side. ≥85% is the qualification threshold.',
-  stddev: 'Spread of predictions across Top-7 models. ≤2.5 is the qualification threshold.',
-  mss: 'Model Strength Score — composite of edge, agreement, and variance.',
-  confidence_bin: 'Qualitative bucket from MSS. For display only — qualification uses the raw filter criteria.',
-  suggested_play: 'Passes Edge ≥1.5 + StdDev ≤2.5 + Agreement ≥85%. Historically ~58% ATS (2021–2025).',
-  valid_model_count: 'Number of source models with a usable prediction for this game.',
-  tv_network: 'Broadcast network from CFBD media data.',
+import { useEffect, useMemo, useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
+
+const SUPABASE_URL = 'https://zpmdrazbqgzheqkvfltv.supabase.co';
+const SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpwbWRyYXpicWd6aGVxa3ZmbHR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgzMDY0MjksImV4cCI6MjEwMzg4MjQyOX0.NnVqnpyXRuu5zVpYa12NZ1jl24u2dPWL2vkiQKghuag';
+
+const SB_HEADERS = {
+  apikey: SUPABASE_ANON_KEY,
+  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+  'Content-Type': 'application/json',
 };
 
-function InfoIcon({ text }) {
-  const [open, setOpen] = useState(false);
+const COLUMNS = [
+  { key: 'rank', label: 'Rank', sortable: true },
+  { key: 'matchup', label: 'Matchup', sortable: false, sticky: true },
+  { key: 'kickoff_at', label: 'Kickoff', sortable: true },
+  { key: 'vegas_line', label: 'Vegas Line', sortable: true },
+  { key: 'line_move', label: 'Move', sortable: true },
+  { key: 'over_under', label: 'O/U', sortable: true },
+  { key: 'consensus_spread', label: 'Consensus', sortable: true },
+  { key: 'edge', label: 'Edge', sortable: true },
+  { key: 'agreement', label: 'Agree % (Top-K)', sortable: true },
+  { key: 'agreement_all_pct', label: 'Agree % (All)', sortable: true },
+  { key: 'stddev', label: 'StdDev', sortable: true },
+  { key: 'range', label: 'Range', sortable: true },
+  { key: 'mss', label: 'MSS', sortable: true },
+  { key: 'confidence_bin', label: 'Confidence', sortable: true },
+  { key: 'suggested_play', label: 'Model Play?', sortable: true },
+  { key: 'valid_model_count', label: '# Models', sortable: true },
+  { key: 'tv_network', label: 'TV', sortable: false },
+  { key: 'lean', label: 'Lean', sortable: false },
+  { key: 'play', label: 'My Play', sortable: false },
+  { key: 'notes', label: 'Notes', sortable: false },
+];
+
+const TOOLTIPS = {
+  rank: 'Games ranked 1\u2013N by Model Strength Score (MSS), the same backtested composite metric used for confidence \u2014 not a separate ad-hoc formula. #1 is the strongest signal this week.',
+  matchup: 'Away team @ home team.',
+  kickoff_at: 'Scheduled kickoff time, shown in Eastern Time.',
+  vegas_line: 'The favored team and current market spread.',
+  line_move: 'How many points the market has moved since the line opened. Positive = moved toward the home team; negative = moved toward the away team.',
+  over_under: 'The market total (combined predicted points for both teams) from sportsbook lines.',
+  consensus_spread: "BobbyCFB's weighted-average predicted spread, shown as the team and price the model itself would favor \u2014 same side as the Edge, converted to standard sportsbook notation (favorite negative, underdog positive).",
+  edge: 'Consensus spread minus the Vegas line. The size of the disagreement between the model consensus and the market \u2014 the core signal this system is built around.',
+  agreement: 'The fraction of the Top-K model pool (the ~7 models actually used for the consensus) whose prediction falls on the same side of the market line as the edge, with the team that direction favors and the raw count.',
+  agreement_all_pct: 'The same agreement calculation, but across every model that submitted a prediction this week (not just the Top-K pool used for consensus). Useful as a sanity check \u2014 if Top-K and All disagree sharply, the Top-K pool may be an outlier relative to the wider field.',
+  stddev: 'Standard deviation of predicted spreads across the selected top models. Lower means the models are tightly clustered; higher means they disagree with each other.',
+  range: 'The spread between the most bullish and most bearish top-model prediction (max \u2212 min). A tight range means all the top models are in the same neighborhood; a wide range can mean one outlier is skewing StdDev without the whole group actually disagreeing.',
+  mss: 'Model Strength Score \u2014 a composite confidence score combining edge size, agreement, and variance. Higher MSS means a stronger, more reliable signal.',
+  confidence_bin: 'A qualitative bucket (Very Strong \u2192 Very Weak) derived from MSS, for quick scanning. The backtested qualification filter (Edge \u22651.5, StdDev \u22642.5, Agreement \u226585%) is what actually flags a Model Play \u2014 not this bucket alone.',
+  suggested_play: 'Whether this game passes the backtested qualification filter (Edge \u22651.5, StdDev \u22642.5, Agreement \u226585%), which historically hit ~58% ATS across 2021\u20132025 backtesting. This is the model\u2019s pick, separate from your own.',
+  valid_model_count: 'How many of the ~30+ source systems submitted a usable prediction for this game.',
+  tv_network: 'Broadcast network airing the game, where available.',
+  lean: 'A quick, informal flag for games you\u2019re leaning toward but haven\u2019t committed to. Not counted in your official season record.',
+  play: 'Your official play for this game \u2014 the side, bet type, and unit size you\u2019re actually tracking for season results.',
+  notes: 'Your private notes on this game \u2014 injuries, weather, anything worth remembering.',
+};
+
+function fmt(n, digits = 1) {
+  if (n === null || n === undefined) return '\u2014';
+  const num = typeof n === 'string' ? parseFloat(n) : n;
+  if (Number.isNaN(num)) return '\u2014';
+  return num.toFixed(digits);
+}
+
+function fmtLine(n) {
+  if (n === null || n === undefined) return '\u2014';
+  const num = typeof n === 'string' ? parseFloat(n) : n;
+  if (Number.isNaN(num)) return '\u2014';
+  return num > 0 ? `+${num}` : `${num}`;
+}
+
+function fmtFavoredLine(line, homeTeam, awayTeam) {
+  if (line === null || line === undefined) return '\u2014';
+  const num = typeof line === 'string' ? parseFloat(line) : line;
+  if (Number.isNaN(num)) return '\u2014';
+  if (num === 0) return "Pick'em";
+  if (num > 0) return `${homeTeam} -${num}`;
+  return `${awayTeam} -${Math.abs(num)}`;
+}
+
+function fmtKickoff(iso) {
+  if (!iso) return 'TBD';
+  const d = new Date(iso);
   return (
-    <span className="info-wrap" style={{ position: 'relative' }}>
-      <span
-        className="info-icon"
-        onMouseEnter={() => setOpen(true)}
-        onMouseLeave={() => setOpen(false)}
-        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
-      >i</span>
-      {open && <span className="tooltip-box">{text}</span>}
+    d.toLocaleString('en-US', {
+      timeZone: 'America/New_York',
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    }) + ' ET'
+  );
+}
+
+// The stored line is a single number per game: positive = home favored.
+// Standard sportsbook notation always shows the favorite with a minus sign,
+// so home's displayed number is -V and away's is +V (i.e. V itself).
+function spreadForSide(vegasLine, side) {
+  if (vegasLine === null || vegasLine === undefined) return null;
+  const v = parseFloat(vegasLine);
+  if (Number.isNaN(v)) return null;
+  return side === 'home' ? -v : v;
+}
+
+// Which side the model consensus itself likes (same side as the edge),
+// and that side's own predicted line in standard notation.
+function consensusPick(r) {
+  if (r.consensus_spread == null || r.edge == null) return null;
+  const side = parseFloat(r.edge) >= 0 ? 'home' : 'away';
+  const team = side === 'home' ? r.home_team : r.away_team;
+  const num = spreadForSide(r.consensus_spread, side);
+  return { side, team, num };
+}
+
+const TEAM_ABBR = {
+  'Alabama': 'ALA', 'Auburn': 'AUB', 'California': 'CAL', 'Cincinnati': 'CIN',
+  'Colorado St.': 'CSU', 'Duke': 'DUKE', 'Eastern Mich.': 'EMU', 'Florida': 'FLA',
+  'Florida St.': 'FSU', 'Georgia Tech': 'GT', 'Hawaii': 'HAW', 'Houston': 'HOU',
+  'Illinois': 'ILL', 'Indiana': 'IND', 'Iowa': 'IOWA', 'James Madison': 'JMU',
+  'LSU': 'LSU', 'Memphis': 'MEM', 'Michigan': 'MICH', 'Michigan St.': 'MSU',
+  'Mississippi': 'MISS', 'Mississippi St.': 'MSST', 'Nebraska': 'NEB', 'Nevada': 'NEV',
+  'New Mexico': 'UNM', 'Notre Dame': 'ND', 'Ohio St.': 'OSU', 'Oklahoma': 'OU',
+  'Oregon': 'ORE', 'Penn St.': 'PSU', 'Pittsburgh': 'PITT', 'Rutgers': 'RUTG',
+  'South Carolina': 'SCAR', 'South Florida': 'USF', 'Stanford': 'STAN', 'Texas': 'TEX',
+  'Texas A&M': 'TAMU', 'Troy St.': 'TROY', 'Tulsa': 'TLSA', 'USC': 'USC',
+  'Wake Forest': 'WAKE', 'Washington': 'WASH', 'West Va.': 'WVU',
+  'East Carolina': 'ECU', 'Baylor': 'BAY', 'UCLA': 'UCLA', 'Boston College': 'BC',
+  'Wyoming': 'WYO', 'Tulane': 'TULN', 'San Jose St.': 'SJSU', 'Florida Atlantic': 'FAU',
+  'SMU': 'SMU', 'Colorado': 'COLO', 'UNLV': 'UNLV', 'Oregon St.': 'ORST', 'UAB': 'UAB',
+  'North Texas': 'UNT', 'Northern Ill.': 'NIU', 'Liberty': 'LIB', 'Clemson': 'CLEM',
+  'Arkansas St.': 'ARST', 'Western Mich.': 'WMU', 'Toledo': 'TOL', 'Louisville': 'LOU',
+  'Louisiana-Monroe': 'ULM', 'Ohio': 'OHIO', 'Western Kentucky': 'WKU', 'Central Mich.': 'CMU',
+  'Wisconsin': 'WISC', 'Ball St.': 'BALL', 'UTEP': 'UTEP', 'Boise St.': 'BSU',
+  'Marshall': 'MRSH', 'Miami (Ohio)': 'M-OH', 'Massachusetts': 'UMASS', 'Kent': 'KENT',
+  'Florida Intl.': 'FIU', 'Miami (Fla.)': 'MIA', 'Texas St.': 'TXST', 'Missouri St.': 'MOST',
+  'Sam Houston St.': 'SHSU', 'Oklahoma St.': 'OKST', 'Fresno St.': 'FRES', 'Akron': 'AKR',
+  'Washington St.': 'WSU', 'Coastal Carolina': 'CCU',
+};
+function abbr(team) {
+  return TEAM_ABBR[team] || team;
+}
+
+function fmtKickoffPrint(iso) {
+  if (!iso) return 'TBD';
+  const d = new Date(iso);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', weekday: 'short', month: 'numeric', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  }).formatToParts(d);
+  const get = (t) => parts.find((p) => p.type === t)?.value || '';
+  const time = `${get('hour')}:${get('minute')}${get('dayPeriod')?.[0]?.toLowerCase() || ''}`;
+  return `${get('weekday')} ${get('month')}/${get('day')} ${time}`;
+}
+
+const CONFIDENCE_ORDER = ['Very Strong', 'Strong', 'Moderate', 'Weak', 'Very Weak'];
+
+// Grade a pick against a finished game. Straight units, no vig modeled.
+function gradePick(pick, game) {
+  if (!game || game.home_score == null || game.away_score == null) return null;
+  const margin = game.home_score - game.away_score;
+  if (pick.pick_type === 'total') {
+    if (pick.line_played == null) return null;
+    const total = game.home_score + game.away_score;
+    if (total === pick.line_played) return 'push';
+    if (pick.side === 'over') return total > pick.line_played ? 'win' : 'loss';
+    if (pick.side === 'under') return total < pick.line_played ? 'win' : 'loss';
+    return null;
+  }
+  if (pick.line_played == null) return null;
+  if (margin === pick.line_played) return 'push';
+  if (pick.side === 'home') return margin > pick.line_played ? 'win' : 'loss';
+  if (pick.side === 'away') return margin < pick.line_played ? 'win' : 'loss';
+  return null;
+}
+
+// CLV: positive = you beat the closing line. Spread only (no closing total tracked yet).
+function computeCLV(pick, game) {
+  if (pick.pick_type !== 'spread') return null;
+  if (game?.closing_line == null || pick.line_played == null) return null;
+  const closing = parseFloat(game.closing_line);
+  const played = parseFloat(pick.line_played);
+  const sign = pick.side === 'home' ? 1 : -1;
+  return sign * (closing - played);
+}
+
+function useOutsideClose(ref, onClose) {
+  useEffect(() => {
+    function handler(e) {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [ref, onClose]);
+}
+
+function InfoIcon({ text }) {
+  const [pos, setPos] = useState(null);
+  const ref = useRef(null);
+
+  function show() {
+    const rect = ref.current.getBoundingClientRect();
+    let x = rect.left + rect.width / 2;
+    x = Math.max(120, Math.min(x, window.innerWidth - 120));
+    setPos({ x, y: rect.bottom + 8 });
+  }
+  function hide() {
+    setPos(null);
+  }
+
+  return (
+    <span
+      ref={ref}
+      className="info-icon"
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onClick={(e) => {
+        e.stopPropagation();
+        pos ? hide() : show();
+      }}
+    >
+      i
+      {pos &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div className="tooltip-fixed" style={{ left: pos.x, top: pos.y }}>
+            {text}
+          </div>,
+          document.body
+        )}
+      <style jsx>{`
+        .info-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 14px;
+          height: 14px;
+          border-radius: 50%;
+          background: #2a3042;
+          color: #8a92a3;
+          font-size: 10px;
+          font-style: italic;
+          font-weight: 700;
+          cursor: help;
+          text-transform: none;
+          margin-left: 5px;
+        }
+        .info-icon:hover {
+          background: #38bd94;
+          color: #0b0e14;
+        }
+      `}</style>
     </span>
   );
 }
 
-const COLS = [
-  { key: 'rank', label: '#', sortable: true, sticky: true },
-  { key: 'matchup', label: 'Matchup', sortable: false, sticky: true },
-  { key: 'kickoff_at', label: 'Kickoff', sortable: true },
-  { key: 'vegas_line', label: 'Vegas', sortable: true },
-  { key: 'over_under', label: 'O/U', sortable: true },
-  { key: 'consensus_spread', label: 'Consensus', sortable: true },
-  { key: 'edge', label: 'Edge', sortable: true },
-  { key: 'agreement', label: 'Agree%', sortable: true },
-  { key: 'stddev', label: 'StdDev', sortable: true },
-  { key: 'mss', label: 'MSS', sortable: true },
-  { key: 'confidence_bin', label: 'Confidence', sortable: true },
-  { key: 'suggested_play', label: 'Model Play', sortable: true },
-  { key: 'valid_model_count', label: '#Mdls', sortable: true },
-  { key: 'tv_network', label: 'TV', sortable: false },
-  { key: 'my_pick', label: 'My Pick', sortable: false },
-];
+function TeamLogo({ src, alt }) {
+  if (!src) return null;
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className="team-logo"
+      onError={(e) => {
+        e.currentTarget.style.display = 'none';
+      }}
+    />
+  );
+}
+
+function PickModal({ game, existing, defaultStatus, onClose, onSaved, onDeleted }) {
+  const ref = useRef(null);
+  useOutsideClose(ref, onClose);
+
+  const [pickType, setPickType] = useState(existing?.pick_type || 'spread');
+  const [side, setSide] = useState(existing?.side || null);
+  const [units, setUnits] = useState(existing?.units || 1);
+  const [status, setStatus] = useState(existing?.status || defaultStatus || 'official');
+  const [saving, setSaving] = useState(false);
+
+  const homeLine = game.vegas_line;
+  const homeDisplay = spreadForSide(homeLine, 'home');
+  const awayDisplay = spreadForSide(homeLine, 'away');
+
+  async function handleSave() {
+    if (!side) return;
+    setSaving(true);
+    // line_played is always the game's single stored line (home-positive
+    // convention), regardless of which side is picked — grading logic
+    // depends on both sides sharing the same threshold.
+    const linePlayed = pickType === 'total' ? game.over_under : (homeLine != null ? parseFloat(homeLine) : null);
+    const body = {
+      game_id: game.id,
+      game_metrics_id: game.game_metrics_id || null,
+      played: true,
+      pick_type: pickType,
+      side,
+      line_played: linePlayed,
+      units,
+      status,
+    };
+    await fetch(`${SUPABASE_URL}/rest/v1/user_picks?on_conflict=game_id`, {
+      method: 'POST',
+      headers: { ...SB_HEADERS, Prefer: 'resolution=merge-duplicates,return=representation' },
+      body: JSON.stringify(body),
+    });
+    setSaving(false);
+    onSaved();
+  }
+
+  async function handleDelete() {
+    setSaving(true);
+    await fetch(`${SUPABASE_URL}/rest/v1/user_picks?game_id=eq.${game.id}`, {
+      method: 'DELETE',
+      headers: SB_HEADERS,
+    });
+    setSaving(false);
+    onDeleted();
+  }
+
+  return createPortal(
+    <div className="overlay">
+      <div className="modal" ref={ref}>
+        <h3>{game.away_team} @ {game.home_team}</h3>
+
+        <div className="seg">
+          <button className={pickType === 'spread' ? 'on' : ''} onClick={() => { setPickType('spread'); setSide(null); }}>Spread</button>
+          <button className={pickType === 'total' ? 'on' : ''} onClick={() => { setPickType('total'); setSide(null); }}>Total</button>
+        </div>
+
+        {pickType === 'spread' ? (
+          <div className="sidepick">
+            <button className={side === 'away' ? 'on' : ''} onClick={() => setSide('away')}>
+              {game.away_team}<span>{fmtLine(awayDisplay)}</span>
+            </button>
+            <button className={side === 'home' ? 'on' : ''} onClick={() => setSide('home')}>
+              {game.home_team}<span>{fmtLine(homeDisplay)}</span>
+            </button>
+          </div>
+        ) : (
+          <div className="sidepick">
+            <button className={side === 'over' ? 'on' : ''} onClick={() => setSide('over')}>
+              Over<span>{game.over_under ?? '\u2014'}</span>
+            </button>
+            <button className={side === 'under' ? 'on' : ''} onClick={() => setSide('under')}>
+              Under<span>{game.over_under ?? '\u2014'}</span>
+            </button>
+          </div>
+        )}
+
+        <div className="row">
+          <label>Units</label>
+          <div className="units">
+            {[1, 2, 3, 4, 5].map((u) => (
+              <button key={u} className={units === u ? 'on' : ''} onClick={() => setUnits(u)}>{u}</button>
+            ))}
+          </div>
+        </div>
+
+        <div className="row">
+          <label>Status</label>
+          <div className="seg small">
+            <button className={status === 'lean' ? 'on' : ''} onClick={() => setStatus('lean')}>Lean</button>
+            <button className={status === 'official' ? 'on' : ''} onClick={() => setStatus('official')}>Official</button>
+          </div>
+        </div>
+
+        <div className="actions">
+          {existing && <button className="danger" onClick={handleDelete} disabled={saving}>Remove</button>}
+          <button className="ghost" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="primary" onClick={handleSave} disabled={saving || !side}>{saving ? 'Saving\u2026' : 'Save'}</button>
+        </div>
+      </div>
+
+      <style jsx>{`
+        .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+        .modal { background: #131722; border: 1px solid #2a3042; border-radius: 12px; padding: 20px; width: 340px; max-width: 90vw; }
+        h3 { margin: 0 0 14px; font-size: 15px; color: #e6e9ef; }
+        .seg { display: flex; gap: 6px; margin-bottom: 12px; }
+        .seg button { flex: 1; padding: 7px; border-radius: 6px; border: 1px solid #2a3042; background: #0b0e14; color: #8a92a3; cursor: pointer; font-size: 13px; }
+        .seg.small button { padding: 5px; font-size: 12px; }
+        .seg button.on { background: #38bd94; color: #0b0e14; border-color: #38bd94; font-weight: 600; }
+        .sidepick { display: flex; gap: 8px; margin-bottom: 14px; }
+        .sidepick button { flex: 1; padding: 10px 6px; border-radius: 8px; border: 1px solid #2a3042; background: #0b0e14; color: #e6e9ef; cursor: pointer; text-align: center; display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; }
+        .sidepick button span { font-weight: 400; color: #8a92a3; font-size: 12px; }
+        .sidepick button.on { border-color: #38bd94; background: rgba(56,189,148,0.1); }
+        .sidepick button.on span { color: #38bd94; }
+        .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+        .row label { font-size: 12px; color: #8a92a3; text-transform: uppercase; letter-spacing: 0.04em; }
+        .units { display: flex; gap: 4px; }
+        .units button { width: 28px; height: 28px; border-radius: 6px; border: 1px solid #2a3042; background: #0b0e14; color: #8a92a3; cursor: pointer; font-size: 13px; }
+        .units button.on { background: #38bd94; color: #0b0e14; border-color: #38bd94; font-weight: 700; }
+        .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+        .actions button { padding: 7px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; border: 1px solid #2a3042; }
+        .primary { background: #38bd94; color: #0b0e14; border-color: #38bd94; font-weight: 600; }
+        .primary:disabled { opacity: 0.5; cursor: not-allowed; }
+        .ghost { background: transparent; color: #8a92a3; }
+        .danger { background: transparent; color: #f87171; border-color: #f87171; margin-right: auto; }
+      `}</style>
+    </div>,
+    document.body
+  );
+}
+
+function NoteModal({ game, existing, onClose, onSaved }) {
+  const ref = useRef(null);
+  useOutsideClose(ref, onClose);
+  const [text, setText] = useState(existing?.note || '');
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    setSaving(true);
+    await fetch(`${SUPABASE_URL}/rest/v1/user_picks?on_conflict=game_id`, {
+      method: 'POST',
+      headers: { ...SB_HEADERS, Prefer: 'resolution=merge-duplicates,return=representation' },
+      body: JSON.stringify({ game_id: game.id, note: text }),
+    });
+    setSaving(false);
+    onSaved(text);
+  }
+
+  return createPortal(
+    <div className="overlay">
+      <div className="modal" ref={ref}>
+        <h3>Notes \u2014 {game.away_team} @ {game.home_team}</h3>
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} placeholder="Injuries, weather, matchup notes\u2026" />
+        <div className="actions">
+          <button className="ghost" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="primary" onClick={handleSave} disabled={saving}>{saving ? 'Saving\u2026' : 'Save'}</button>
+        </div>
+      </div>
+      <style jsx>{`
+        .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+        .modal { background: #131722; border: 1px solid #2a3042; border-radius: 12px; padding: 20px; width: 380px; max-width: 90vw; }
+        h3 { margin: 0 0 14px; font-size: 15px; color: #e6e9ef; }
+        textarea { width: 100%; background: #0b0e14; border: 1px solid #2a3042; border-radius: 8px; color: #e6e9ef; padding: 10px; font-size: 13px; resize: vertical; font-family: inherit; }
+        .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+        .actions button { padding: 7px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; border: 1px solid #2a3042; }
+        .primary { background: #38bd94; color: #0b0e14; border-color: #38bd94; font-weight: 600; }
+        .ghost { background: transparent; color: #8a92a3; }
+      `}</style>
+    </div>,
+    document.body
+  );
+}
 
 export default function Dashboard() {
   const [season, setSeason] = useState(2026);
   const [week, setWeek] = useState(1);
-  const [games, setGames] = useState([]);
-  const [userPicks, setUserPicks] = useState([]);
+  const [rows, setRows] = useState([]);
+  const [picksByGame, setPicksByGame] = useState({});
+  const [logos, setLogos] = useState({});
+  const [ranges, setRanges] = useState({});
+  const [agreementAll, setAgreementAll] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
   const [sortKey, setSortKey] = useState('mss');
   const [sortDir, setSortDir] = useState('desc');
 
-  // Filters
   const [search, setSearch] = useState('');
   const [confFilter, setConfFilter] = useState('All');
   const [playOnly, setPlayOnly] = useState(false);
   const [minEdge, setMinEdge] = useState('');
-  const [maxEdge, setMaxEdge] = useState('');
-  const [minOU, setMinOU] = useState('');
-  const [maxOU, setMaxOU] = useState('');
-  const [minLine, setMinLine] = useState('');
-  const [maxLine, setMaxLine] = useState('');
-  const [maxStdDev, setMaxStdDev] = useState('');
-  const [minAgree, setMinAgree] = useState('');
-  const [showFilters, setShowFilters] = useState(false);
+  const [minMove, setMinMove] = useState('');
 
-  // My Card expand
-  const [cardExpanded, setCardExpanded] = useState(false);
+  const [pickModalGame, setPickModalGame] = useState(null);
+  const [pickModalDefaultStatus, setPickModalDefaultStatus] = useState('official');
+  const [noteModalGame, setNoteModalGame] = useState(null);
 
-  const load = async () => {
-    setLoading(true); setError(null);
+  const [showMyCard, setShowMyCard] = useState(false);
+  const [showSeasonStats, setShowSeasonStats] = useState(false);
+  const [seasonPicks, setSeasonPicks] = useState(null);
+  const [seasonLoading, setSeasonLoading] = useState(false);
+
+  const [cardConfFilter, setCardConfFilter] = useState('All');
+  const [cardTypeFilter, setCardTypeFilter] = useState('All');
+
+  async function loadWeek() {
+    setLoading(true);
+    setError(null);
     try {
-      const [gData, pData] = await Promise.all([
-        sbFetch(`games?select=id,home_team,away_team,kickoff_at,current_line,over_under,tv_network,status,game_metrics(vegas_line,consensus_spread,edge,agreement,stddev,mss,confidence_bin,suggested_play,suggested_side,suggested_line,valid_model_count)&season=eq.${season}&week=eq.${week}&order=home_team.asc`),
-        sbFetch(`user_picks?select=*&season=eq.${season}&week=eq.${week}&is_custom=eq.false`),
-      ]);
-      setGames(gData);
-      setUserPicks(pData);
-    } catch (e) { setError(e.message); }
-    finally { setLoading(false); }
-  };
+      const gamesUrl = `${SUPABASE_URL}/rest/v1/games?select=id,home_team,away_team,kickoff_at,current_line,opening_line,closing_line,over_under,tv_network,status,home_score,away_score,game_metrics(id,vegas_line,consensus_spread,edge,agreement,stddev,mss,confidence_bin,suggested_play,suggested_side,suggested_line,valid_model_count,actual_k,topk_model_ids)&season=eq.${season}&week=eq.${week}`;
+      const picksUrl = `${SUPABASE_URL}/rest/v1/user_picks?select=*,games!inner(season,week)&games.season=eq.${season}&games.week=eq.${week}`;
+      const logosUrl = `${SUPABASE_URL}/rest/v1/team_logos?select=team_name,logo_url`;
 
-  useEffect(() => { load(); }, [season, week]);
+      const [gamesRes, picksRes, logosRes] = await Promise.all([
+        fetch(gamesUrl, { headers: SB_HEADERS }),
+        fetch(picksUrl, { headers: SB_HEADERS }),
+        fetch(logosUrl, { headers: SB_HEADERS }),
+      ]);
+      if (!gamesRes.ok) throw new Error(`Supabase error ${gamesRes.status}`);
+      const gamesData = await gamesRes.json();
+      const picksData = picksRes.ok ? await picksRes.json() : [];
+      const logosData = logosRes.ok ? await logosRes.json() : [];
+
+      const byGame = {};
+      for (const p of picksData) byGame[p.game_id] = p;
+
+      const logoMap = {};
+      for (const l of logosData) logoMap[l.team_name] = l.logo_url;
+
+      // Fetch raw predictions for all games this week, then compute per-game
+      // range (max - min) restricted to each game's top-K model pool.
+      let rangeByGame = {};
+      let agreementAllByGame = {};
+      if (gamesData.length > 0) {
+        const gameIds = gamesData.map((g) => g.id).join(',');
+        const predsUrl = `${SUPABASE_URL}/rest/v1/raw_predictions?select=game_id,model_id,predicted_margin&game_id=in.(${gameIds})`;
+        const predsRes = await fetch(predsUrl, { headers: SB_HEADERS });
+        if (predsRes.ok) {
+          const preds = await predsRes.json();
+          const byGamePreds = {};
+          for (const p of preds) {
+            if (!byGamePreds[p.game_id]) byGamePreds[p.game_id] = [];
+            byGamePreds[p.game_id].push(p);
+          }
+          for (const g of gamesData) {
+            const m = Array.isArray(g.game_metrics) ? g.game_metrics[0] : g.game_metrics;
+            const topk = m?.topk_model_ids || [];
+            const gamePreds = byGamePreds[g.id] || [];
+            const topkPreds = gamePreds
+              .filter((p) => topk.includes(p.model_id))
+              .map((p) => parseFloat(p.predicted_margin));
+            if (topkPreds.length >= 2) {
+              rangeByGame[g.id] = Math.max(...topkPreds) - Math.min(...topkPreds);
+            }
+            // Agreement across the FULL valid model pool (not just Top-K),
+            // using the same "which side of the market line" logic as the
+            // official agreement metric.
+            const vegasLine = m?.vegas_line != null ? parseFloat(m.vegas_line) : (g.current_line != null ? parseFloat(g.current_line) : null);
+            const edgeVal = m?.edge != null ? parseFloat(m.edge) : null;
+            if (vegasLine != null && edgeVal != null && gamePreds.length > 0) {
+              const edgePositive = edgeVal > 0;
+              let agreeCount = 0;
+              for (const p of gamePreds) {
+                const margin = parseFloat(p.predicted_margin);
+                if (Number.isNaN(margin)) continue;
+                if ((margin > vegasLine) === edgePositive) agreeCount++;
+              }
+              agreementAllByGame[g.id] = { count: agreeCount, total: gamePreds.length, pct: (agreeCount / gamePreds.length) * 100 };
+            }
+          }
+        }
+      }
+
+      setRows(gamesData);
+      setPicksByGame(byGame);
+      setLogos(logoMap);
+      setRanges(rangeByGame);
+      setAgreementAll(agreementAllByGame);
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadWeek();
+  }, [season, week]);
+
+  async function loadSeasonStats() {
+    setSeasonLoading(true);
+    try {
+      const url = `${SUPABASE_URL}/rest/v1/user_picks?select=*,games!inner(season,home_team,away_team,home_score,away_score,status,closing_line)&status=eq.official&games.status=eq.final&games.season=eq.${season}`;
+      const res = await fetch(url, { headers: SB_HEADERS });
+      const data = res.ok ? await res.json() : [];
+      setSeasonPicks(data);
+    } finally {
+      setSeasonLoading(false);
+    }
+  }
+
+  function refreshAfterPickChange() {
+    setPickModalGame(null);
+    loadWeek();
+    if (showSeasonStats) loadSeasonStats();
+  }
 
   const flat = useMemo(() => {
-    const pickByGame = {};
-    for (const p of userPicks) pickByGame[p.game_id] = p;
-    return games.map((g, i) => {
+    return rows.map((g) => {
       const m = Array.isArray(g.game_metrics) ? g.game_metrics[0] : g.game_metrics;
-      const agree = m?.agreement != null ? parseFloat(m.agreement) * 100 : null;
+      const pick = picksByGame[g.id] || null;
+      const agreementPct = m?.agreement != null ? parseFloat(m.agreement) * 100 : null;
+      // Agreement is defined over the Top-K pool used for consensus (actual_k),
+      // not the full valid_model_count — those are two different denominators.
+      const modelsAgreeing =
+        agreementPct != null && m?.actual_k != null
+          ? Math.round((agreementPct / 100) * m.actual_k)
+          : null;
+      const lineMove =
+        g.opening_line != null && g.current_line != null
+          ? parseFloat(g.current_line) - parseFloat(g.opening_line)
+          : null;
+      // Agreement is measured relative to the EDGE direction (which side of the
+      // market line the top models are on), not the raw sign of the consensus
+      // average — those can point different ways, as they did for CSU/Wyoming.
+      const agreeSide =
+        m?.edge != null
+          ? parseFloat(m.edge) > 0
+            ? g.home_team
+            : g.away_team
+          : null;
       return {
-        _idx: i + 1,
         id: g.id,
-        home_team: g.home_team,
+        matchup: `${g.away_team} @ ${g.home_team}`,
         away_team: g.away_team,
+        home_team: g.home_team,
         kickoff_at: g.kickoff_at,
         status: g.status,
+        home_score: g.home_score,
+        away_score: g.away_score,
+        closing_line: g.closing_line,
         vegas_line: m?.vegas_line ?? g.current_line,
+        line_move: lineMove,
         over_under: g.over_under ?? null,
         tv_network: g.tv_network ?? null,
         consensus_spread: m?.consensus_spread ?? null,
         edge: m?.edge ?? null,
-        agreement: agree,
+        agreement: agreementPct,
+        agree_side: agreeSide,
+        models_agreeing: modelsAgreeing,
+        actual_k: m?.actual_k ?? null,
+        agreement_all_pct: agreementAll[g.id]?.pct ?? null,
+        agreement_all_count: agreementAll[g.id]?.count ?? null,
+        agreement_all_total: agreementAll[g.id]?.total ?? null,
         stddev: m?.stddev ?? null,
+        range: ranges[g.id] ?? null,
         mss: m?.mss ?? null,
         confidence_bin: m?.confidence_bin ?? null,
         suggested_play: !!m?.suggested_play,
         suggested_side: m?.suggested_side ?? null,
         suggested_line: m?.suggested_line ?? null,
         valid_model_count: m?.valid_model_count ?? null,
-        pick: pickByGame[g.id] ?? null,
+        game_metrics_id: m?.id ?? null,
+        pick,
       };
     });
-  }, [games, userPicks]);
+  }, [rows, picksByGame, ranges, agreementAll]);
 
   const filtered = useMemo(() => {
     let out = flat;
     if (search.trim()) {
       const q = search.trim().toLowerCase();
-      out = out.filter(r => r.home_team.toLowerCase().includes(q) || r.away_team.toLowerCase().includes(q));
+      out = out.filter((r) => r.home_team.toLowerCase().includes(q) || r.away_team.toLowerCase().includes(q));
     }
-    if (confFilter !== 'All') out = out.filter(r => r.confidence_bin === confFilter);
-    if (playOnly) out = out.filter(r => r.suggested_play);
-    if (minEdge !== '') { const t = parseFloat(minEdge); if (!isNaN(t)) out = out.filter(r => r.edge !== null && parseFloat(r.edge) >= t); }
-    if (maxEdge !== '') { const t = parseFloat(maxEdge); if (!isNaN(t)) out = out.filter(r => r.edge !== null && parseFloat(r.edge) <= t); }
-    if (minOU !== '') { const t = parseFloat(minOU); if (!isNaN(t)) out = out.filter(r => r.over_under !== null && parseFloat(r.over_under) >= t); }
-    if (maxOU !== '') { const t = parseFloat(maxOU); if (!isNaN(t)) out = out.filter(r => r.over_under !== null && parseFloat(r.over_under) <= t); }
-    if (minLine !== '') { const t = parseFloat(minLine); if (!isNaN(t)) out = out.filter(r => r.vegas_line !== null && parseFloat(r.vegas_line) >= t); }
-    if (maxLine !== '') { const t = parseFloat(maxLine); if (!isNaN(t)) out = out.filter(r => r.vegas_line !== null && parseFloat(r.vegas_line) <= t); }
-    if (maxStdDev !== '') { const t = parseFloat(maxStdDev); if (!isNaN(t)) out = out.filter(r => r.stddev !== null && parseFloat(r.stddev) <= t); }
-    if (minAgree !== '') { const t = parseFloat(minAgree); if (!isNaN(t)) out = out.filter(r => r.agreement !== null && parseFloat(r.agreement) >= t); }
+    if (confFilter !== 'All') out = out.filter((r) => r.confidence_bin === confFilter);
+    if (playOnly) out = out.filter((r) => r.suggested_play);
+    if (minEdge !== '') {
+      const threshold = parseFloat(minEdge);
+      if (!Number.isNaN(threshold)) out = out.filter((r) => r.edge !== null && Math.abs(parseFloat(r.edge)) >= threshold);
+    }
+    if (minMove !== '') {
+      const threshold = parseFloat(minMove);
+      if (!Number.isNaN(threshold)) out = out.filter((r) => r.line_move !== null && Math.abs(r.line_move) >= threshold);
+    }
     return out;
-  }, [flat, search, confFilter, playOnly, minEdge, maxEdge, minOU, maxOU, minLine, maxLine, maxStdDev, minAgree]);
+  }, [flat, search, confFilter, playOnly, minEdge, minMove]);
+
+  // Rank 1..N by MSS descending (ties broken by |edge|) — the same
+  // backtested composite metric used for Confidence, not a separate formula.
+  const rankByGameId = useMemo(() => {
+    const ranked = [...flat].sort((a, b) => {
+      const am = a.mss ?? -Infinity;
+      const bm = b.mss ?? -Infinity;
+      if (bm !== am) return bm - am;
+      const ae = a.edge != null ? Math.abs(parseFloat(a.edge)) : -Infinity;
+      const be = b.edge != null ? Math.abs(parseFloat(b.edge)) : -Infinity;
+      return be - ae;
+    });
+    const map = {};
+    ranked.forEach((r, i) => { map[r.id] = i + 1; });
+    return map;
+  }, [flat]);
 
   const sorted = useMemo(() => {
     const out = [...filtered];
     out.sort((a, b) => {
-      let av = a[sortKey], bv = b[sortKey];
+      let av = sortKey === 'rank' ? rankByGameId[a.id] : a[sortKey];
+      let bv = sortKey === 'rank' ? rankByGameId[b.id] : b[sortKey];
       if (sortKey === 'confidence_bin') {
         av = CONFIDENCE_ORDER.indexOf(av); bv = CONFIDENCE_ORDER.indexOf(bv);
-        if (av < 0) av = 99; if (bv < 0) bv = 99;
+        if (av === -1) av = 99; if (bv === -1) bv = 99;
       } else if (sortKey === 'kickoff_at') {
-        av = av ? new Date(av).getTime() : Infinity;
-        bv = bv ? new Date(bv).getTime() : Infinity;
+        av = av ? new Date(av).getTime() : Infinity; bv = bv ? new Date(bv).getTime() : Infinity;
       } else if (sortKey === 'suggested_play') {
         av = av ? 1 : 0; bv = bv ? 1 : 0;
-      } else {
-        const na = parseFloat(av), nb = parseFloat(bv);
-        if (!isNaN(na)) av = na;
-        if (!isNaN(nb)) bv = nb;
+      } else if (typeof av === 'string' && av !== null && !Number.isNaN(parseFloat(av))) {
+        av = parseFloat(av); bv = parseFloat(bv);
       }
       if (av === null || av === undefined) return 1;
       if (bv === null || bv === undefined) return -1;
-      return (av < bv ? -1 : av > bv ? 1 : 0) * (sortDir === 'asc' ? 1 : -1);
+      if (av < bv) return sortDir === 'asc' ? -1 : 1;
+      if (av > bv) return sortDir === 'asc' ? 1 : -1;
+      return 0;
     });
     return out;
-  }, [filtered, sortKey, sortDir]);
+  }, [filtered, sortKey, sortDir, rankByGameId]);
+
+  // Print always sorts by kickoff time regardless of the on-screen sort,
+  // and respects the current filters.
+  const printSorted = useMemo(() => {
+    const out = [...filtered];
+    out.sort((a, b) => {
+      const at = a.kickoff_at ? new Date(a.kickoff_at).getTime() : Infinity;
+      const bt = b.kickoff_at ? new Date(b.kickoff_at).getTime() : Infinity;
+      return at - bt;
+    });
+    return out;
+  }, [filtered]);
 
   function toggleSort(key) {
-    if (!COLS.find(c => c.key === key)?.sortable) return;
-    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     else { setSortKey(key); setSortDir('desc'); }
   }
 
-  const myPicks = useMemo(() => userPicks.filter(p => p.played || p.status === 'official'), [userPicks]);
-  const lockPick = useMemo(() => userPicks.find(p => p.is_lock), [userPicks]);
+  async function toggleLean(row) {
+    if (row.pick?.status === 'official') return;
+    if (row.pick?.status === 'lean') {
+      await fetch(`${SUPABASE_URL}/rest/v1/user_picks?game_id=eq.${row.id}`, { method: 'DELETE', headers: SB_HEADERS });
+    } else {
+      const side = row.suggested_side || 'home';
+      // line_played is always the game's single stored line, same as PickModal.
+      const line = row.vegas_line != null ? parseFloat(row.vegas_line) : null;
+      await fetch(`${SUPABASE_URL}/rest/v1/user_picks?on_conflict=game_id`, {
+        method: 'POST',
+        headers: { ...SB_HEADERS, Prefer: 'resolution=merge-duplicates,return=representation' },
+        body: JSON.stringify({
+          game_id: row.id, game_metrics_id: row.game_metrics_id, played: true,
+          pick_type: 'spread', side, line_played: line, units: 1, status: 'lean',
+        }),
+      });
+    }
+    loadWeek();
+  }
+
+  const myCardPicksAll = useMemo(() => flat.filter((r) => r.pick?.status === 'official'), [flat]);
+  const myCardPicks = useMemo(() => {
+    let out = myCardPicksAll;
+    if (cardConfFilter !== 'All') out = out.filter((r) => r.confidence_bin === cardConfFilter);
+    if (cardTypeFilter !== 'All') out = out.filter((r) => r.pick.pick_type === cardTypeFilter);
+    return out;
+  }, [myCardPicksAll, cardConfFilter, cardTypeFilter]);
+
+  const seasonRecord = useMemo(() => {
+    if (!seasonPicks) return null;
+    let w = 0, l = 0, p = 0, unitsNet = 0;
+    let clvSum = 0, clvCount = 0;
+    for (const sp of seasonPicks) {
+      const g = sp.games;
+      const result = gradePick(sp, g);
+      if (result === 'win') { w++; unitsNet += sp.units || 1; }
+      else if (result === 'loss') { l++; unitsNet -= sp.units || 1; }
+      else if (result === 'push') { p++; }
+      const clv = computeCLV(sp, g);
+      if (clv !== null) { clvSum += clv; clvCount++; }
+    }
+    return { w, l, p, unitsNet, total: w + l + p, avgClv: clvCount ? clvSum / clvCount : null, clvCount };
+  }, [seasonPicks]);
 
   return (
-    <div className="page">
-      {/* Header */}
-      <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <h1>📊 Weekly Dashboard</h1>
-          <p>All games for the selected week — sortable, filterable, with model consensus signals</p>
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <label style={{ fontSize: 12, color: '#8a92a3' }}>Season</label>
-            <input type="number" value={season} onChange={e => setSeason(+e.target.value)} style={inputStyle} />
-            <label style={{ fontSize: 12, color: '#8a92a3' }}>Week</label>
-            <input type="number" value={week} onChange={e => setWeek(+e.target.value)} style={{ ...inputStyle, width: 60 }} />
+    <div className="wrap">
+      <header>
+        <div className="header-top">
+          <div>
+            <h1>BobbyCFB \u2014 Weekly Dashboard</h1>
+            <p className="sub">Consensus spreads, edge &amp; qualification signals across all games</p>
+          </div>
+          <div className="header-actions no-print">
+            <button className="toggle-btn" onClick={() => setShowMyCard((v) => !v)}>
+              My Card {myCardPicksAll.length > 0 && <span className="count-badge">{myCardPicksAll.length}</span>}
+            </button>
+            <button
+              className="toggle-btn"
+              onClick={() => {
+                setShowSeasonStats((v) => !v);
+                if (!showSeasonStats && !seasonPicks) loadSeasonStats();
+              }}
+            >
+              Season Stats
+            </button>
+            <button className="toggle-btn print-btn" onClick={() => window.print()}>
+              \ud83d\udda8\ufe0f Print
+            </button>
           </div>
         </div>
-      </div>
+        <div className="print-header">
+          <div className="print-title">BobbyCFB \u2014 Week {week}, {season}</div>
+          <div className="print-sub">Generated {new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}</div>
+        </div>
+      </header>
 
-      {/* My Card banner */}
-      <div className="card" style={{ marginBottom: 16, cursor: 'pointer' }} onClick={() => setCardExpanded(e => !e)}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ fontSize: 16, fontWeight: 800 }}>🎯 My Card</span>
-            <span style={{ fontSize: 13, color: '#8a92a3' }}>Week {week}</span>
-            {lockPick && <span className="lock-badge">🔒 Lock: {lockPick.note || 'BRLW'}</span>}
-            <span style={{ fontSize: 12, color: '#8a92a3' }}>{myPicks.length} pick{myPicks.length !== 1 ? 's' : ''}</span>
+      {showMyCard && (
+        <div className="panel no-print">
+          <div className="panel-head">
+            <h2>My Card \u2014 Week {week}</h2>
+            <div className="card-filters">
+              <select value={cardConfFilter} onChange={(e) => setCardConfFilter(e.target.value)}>
+                <option value="All">All confidence</option>
+                {CONFIDENCE_ORDER.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <select value={cardTypeFilter} onChange={(e) => setCardTypeFilter(e.target.value)}>
+                <option value="All">All bet types</option>
+                <option value="spread">Spread</option>
+                <option value="total">Total</option>
+              </select>
+            </div>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <a href="/my-card" className="btn btn-primary" onClick={e => e.stopPropagation()} style={{ fontSize: 12, padding: '6px 12px' }}>Full Card</a>
-            <span style={{ color: '#5b6272', fontSize: 13 }}>{cardExpanded ? '▲' : '▼'}</span>
-          </div>
-        </div>
-
-        {cardExpanded && (
-          <div style={{ marginTop: 16, borderTop: '1px solid #1e2535', paddingTop: 16 }}>
-            {myPicks.length === 0
-              ? <p style={{ color: '#5b6272', margin: 0 }}>No picks added yet. Click "My Pick" buttons in the table below to add picks, or go to My Card to manage your full card.</p>
-              : <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {myPicks.map(p => {
-                  const g = games.find(gm => gm.id === p.game_id);
-                  const teamName = p.side === 'home' ? g?.home_team : g?.away_team;
-                  return (
-                    <div key={p.id} className="card" style={{ padding: '10px 14px', background: p.is_lock ? 'rgba(251,191,36,.08)' : 'rgba(56,189,148,.06)', border: `1px solid ${p.is_lock ? 'rgba(251,191,36,.25)' : 'rgba(56,189,148,.2)'}`, minWidth: 160 }}>
-                      {p.is_lock && <div style={{ fontSize: 10, color: '#fbbf24', fontWeight: 800, marginBottom: 2 }}>🔒 BRLW LOCK</div>}
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>{teamName || 'Custom'} {p.line_played != null ? fmtLine(p.line_played) : ''}</div>
-                      <div style={{ fontSize: 11, color: '#8a92a3' }}>{g ? `${g.away_team} @ ${g.home_team}` : p.custom_label}</div>
+          {myCardPicksAll.length === 0 ? (
+            <p className="empty-note">No official plays saved for this week yet. Click the + in the My Play column to add one.</p>
+          ) : myCardPicks.length === 0 ? (
+            <p className="empty-note">No plays match these filters.</p>
+          ) : (
+            <div className="card-list">
+              {myCardPicks.map((r) => {
+                const result = r.status === 'final' ? gradePick(r.pick, r) : null;
+                const clv = computeCLV(r.pick, r);
+                const label =
+                  r.pick.pick_type === 'total'
+                    ? `${r.pick.side === 'over' ? 'Over' : 'Under'} ${r.pick.line_played}`
+                    : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`;
+                return (
+                  <div key={r.id} className="card-item">
+                    <div>
+                      <div className="card-matchup">{r.matchup}</div>
+                      <div className="card-pick">{label} \u00b7 {r.pick.units}u{clv !== null ? ` \u00b7 CLV ${clv >= 0 ? '+' : ''}${clv.toFixed(1)}` : ''}</div>
                     </div>
-                  );
-                })}
-              </div>
-            }
-          </div>
-        )}
-      </div>
-
-      {/* Controls */}
-      <div className="card" style={{ marginBottom: 12, padding: 14 }}>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div className="fc">
-            <label>Search team</label>
-            <input type="text" placeholder="e.g. Auburn" value={search} onChange={e => setSearch(e.target.value)} style={{ ...inputStyle, width: 150 }} />
-          </div>
-          <div className="fc">
-            <label>Confidence</label>
-            <select value={confFilter} onChange={e => setConfFilter(e.target.value)} style={inputStyle}>
-              <option>All</option>
-              {CONFIDENCE_ORDER.map(c => <option key={c}>{c}</option>)}
-            </select>
-          </div>
-          <div className="fc checkbox-fc">
-            <label style={{ flexDirection: 'row', gap: 6 }}>
-              <input type="checkbox" checked={playOnly} onChange={e => setPlayOnly(e.target.checked)} />
-              Model plays only
-            </label>
-          </div>
-          <button className="btn btn-outline" onClick={() => setShowFilters(f => !f)} style={{ fontSize: 12, padding: '7px 12px' }}>
-            {showFilters ? '▲ Hide filters' : '▼ More filters'}
-          </button>
-          <button className="btn btn-outline" onClick={load} style={{ fontSize: 12, padding: '7px 12px' }}>↻ Refresh</button>
+                    {result && <span className={`result-badge ${result}`}>{result}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
+      )}
 
-        {showFilters && (
-          <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #1e2535', display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <span style={{ fontSize: 11, color: '#5b6272', width: '100%', marginBottom: -6 }}>ADVANCED FILTERS — find trends like "home fav −6.5+ with O/U ≤55"</span>
-            <RangeFilter label="Edge" minVal={minEdge} maxVal={maxEdge} onMin={setMinEdge} onMax={setMaxEdge} step="0.5" placeholder="e.g. 1.5" />
-            <RangeFilter label="Vegas Line" minVal={minLine} maxVal={maxLine} onMin={setMinLine} onMax={setMaxLine} step="0.5" placeholder="e.g. -6.5" />
-            <RangeFilter label="O/U" minVal={minOU} maxVal={maxOU} onMin={setMinOU} onMax={setMaxOU} step="0.5" placeholder="e.g. 45" />
-            <div className="fc">
-              <label>Max StdDev</label>
-              <input type="number" step="0.5" placeholder="e.g. 2.5" value={maxStdDev} onChange={e => setMaxStdDev(e.target.value)} style={{ ...inputStyle, width: 90 }} />
+      {showSeasonStats && (
+        <div className="panel no-print">
+          <h2>Season Stats \u2014 {season}</h2>
+          {seasonLoading && <p className="empty-note">Loading\u2026</p>}
+          {!seasonLoading && seasonRecord && (
+            <div className="stats-row">
+              <div className="stat"><span className="stat-num">{seasonRecord.w}-{seasonRecord.l}{seasonRecord.p ? `-${seasonRecord.p}` : ''}</span><span className="stat-label">Record</span></div>
+              <div className="stat"><span className="stat-num">{seasonRecord.total ? `${((seasonRecord.w / (seasonRecord.w + seasonRecord.l || 1)) * 100).toFixed(1)}%` : '\u2014'}</span><span className="stat-label">Win %</span></div>
+              <div className="stat"><span className={`stat-num ${seasonRecord.unitsNet >= 0 ? 'pos' : 'neg'}`}>{seasonRecord.unitsNet >= 0 ? '+' : ''}{seasonRecord.unitsNet.toFixed(1)}u</span><span className="stat-label">Units (straight, no vig)</span></div>
+              <div className="stat"><span className="stat-num">{seasonRecord.total}</span><span className="stat-label">Graded Plays</span></div>
+              <div className="stat">
+                <span className={`stat-num ${seasonRecord.avgClv == null ? '' : seasonRecord.avgClv >= 0 ? 'pos' : 'neg'}`}>
+                  {seasonRecord.avgClv == null ? '\u2014' : `${seasonRecord.avgClv >= 0 ? '+' : ''}${seasonRecord.avgClv.toFixed(2)}`}
+                </span>
+                <span className="stat-label">Avg CLV ({seasonRecord.clvCount} graded)</span>
+              </div>
             </div>
-            <div className="fc">
-              <label>Min Agree %</label>
-              <input type="number" step="1" placeholder="e.g. 85" value={minAgree} onChange={e => setMinAgree(e.target.value)} style={{ ...inputStyle, width: 90 }} />
-            </div>
-            <button className="btn btn-outline" style={{ fontSize: 12, padding: '7px 12px' }} onClick={() => { setMinEdge(''); setMaxEdge(''); setMinOU(''); setMaxOU(''); setMinLine(''); setMaxLine(''); setMaxStdDev(''); setMinAgree(''); }}>Clear</button>
-          </div>
-        )}
+          )}
+          {!seasonLoading && seasonRecord && seasonRecord.total === 0 && (
+            <p className="empty-note">No graded official plays yet this season \u2014 results populate once games go final.</p>
+          )}
+        </div>
+      )}
+
+      <div className="controls no-print">
+        <div className="control">
+          <label>Season</label>
+          <input type="number" value={season} onChange={(e) => setSeason(parseInt(e.target.value || '0', 10))} />
+        </div>
+        <div className="control">
+          <label>Week</label>
+          <input type="number" value={week} onChange={(e) => setWeek(parseInt(e.target.value || '0', 10))} />
+        </div>
+        <div className="control">
+          <label>Search team</label>
+          <input type="text" placeholder="e.g. Auburn" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        <div className="control">
+          <label>Confidence</label>
+          <select value={confFilter} onChange={(e) => setConfFilter(e.target.value)}>
+            <option>All</option>
+            {CONFIDENCE_ORDER.map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </div>
+        <div className="control">
+          <label>Min |Edge|</label>
+          <input type="number" step="0.5" placeholder="e.g. 1.5" value={minEdge} onChange={(e) => setMinEdge(e.target.value)} />
+        </div>
+        <div className="control">
+          <label>Min |Line Move|</label>
+          <input type="number" step="0.5" placeholder="e.g. 1.0" value={minMove} onChange={(e) => setMinMove(e.target.value)} />
+        </div>
+        <div className="control checkbox">
+          <label><input type="checkbox" checked={playOnly} onChange={(e) => setPlayOnly(e.target.checked)} />Model plays only</label>
+        </div>
       </div>
 
-      {loading && <div className="loading">Loading games…</div>}
-      {error && <div className="error-msg">{error}</div>}
+      {loading && <div className="status">Loading\u2026</div>}
+      {error && <div className="status error">Error: {error}</div>}
 
       {!loading && !error && (
         <>
-          <div style={{ fontSize: 12, color: '#5b6272', marginBottom: 8 }}>
-            {sorted.length} of {flat.length} game{flat.length !== 1 ? 's' : ''}
-            {sorted.length < flat.length ? ' (filtered)' : ''}
-          </div>
-          <div className="tbl-wrap">
+          <div className="count no-print">{sorted.length} game{sorted.length === 1 ? '' : 's'}</div>
+          <div className="table-wrap screen-only-table">
             <table>
               <thead>
                 <tr>
-                  {COLS.map(c => (
-                    <th
-                      key={c.key}
-                      className={`${c.sortable ? 'sortable' : ''} ${c.sticky ? (c.key === 'rank' ? 'sticky-col' : 'sticky-col-2') : ''}`}
-                      onClick={() => toggleSort(c.key)}
-                    >
+                  {COLUMNS.map((c) => (
+                    <th key={c.key} onClick={() => c.sortable && toggleSort(c.key)} className={`${c.sortable ? 'sortable' : ''} ${c.sticky ? 'sticky-col' : ''} ${['lean', 'play', 'notes'].includes(c.key) ? 'no-print' : ''}`}>
                       {c.label}
-                      {TIPS[c.key] && <InfoIcon text={TIPS[c.key]} />}
-                      {sortKey === c.key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                      {TOOLTIPS[c.key] && <InfoIcon text={TOOLTIPS[c.key]} />}
+                      {sortKey === c.key ? (sortDir === 'asc' ? ' \u25b2' : ' \u25bc') : ''}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {sorted.map((r, i) => (
-                  <GameRow key={r.id} row={r} rank={i + 1} season={season} week={week} onPickChange={load} />
+                {sorted.map((r) => (
+                  <tr key={r.id} className={r.suggested_play ? 'play-row' : ''}>
+                    <td className="rank-cell">{rankByGameId[r.id]}</td>
+                    <td className={`matchup sticky-col ${r.suggested_play ? 'play-row' : ''}`}>
+                      <TeamLogo src={logos[r.away_team]} alt={r.away_team} />
+                      {r.away_team} @ <TeamLogo src={logos[r.home_team]} alt={r.home_team} />
+                      {r.home_team}
+                    </td>
+                    <td>{fmtKickoff(r.kickoff_at)}</td>
+                    <td>{fmtFavoredLine(r.vegas_line, r.home_team, r.away_team)}</td>
+                    <td className={r.line_move !== null && Math.abs(r.line_move) >= 0.5 ? (r.line_move > 0 ? 'move-up' : 'move-down') : 'dim'}>
+                      {r.line_move !== null ? `${r.line_move > 0 ? '\u25b2 ' : r.line_move < 0 ? '\u25bc ' : ''}${Math.abs(r.line_move).toFixed(1)}` : '\u2014'}
+                    </td>
+                    <td className={r.over_under == null ? 'dim' : ''}>{r.over_under ?? '\u2014'}</td>
+                    <td>
+                      {(() => {
+                        const c = consensusPick(r);
+                        return c ? (
+                          <span className="consensus-cell">
+                            <TeamLogo src={logos[c.team]} alt={c.team} />
+                            {c.team} {fmtLine(fmt(c.num, 2))}
+                          </span>
+                        ) : '\u2014';
+                      })()}
+                    </td>
+                    <td className={r.edge !== null && Math.abs(parseFloat(r.edge)) >= 1.5 ? 'strong' : ''}>{fmtLine(fmt(r.edge, 2))}</td>
+                    <td>{r.agreement !== null ? `${r.agree_side} ${fmt(r.agreement, 0)}% (${r.models_agreeing}/${r.actual_k})` : '\u2014'}</td>
+                    <td>{r.agreement_all_pct !== null ? `${r.agree_side} ${fmt(r.agreement_all_pct, 0)}% (${r.agreement_all_count}/${r.agreement_all_total})` : '\u2014'}</td>
+                    <td>{fmt(r.stddev, 2)}</td>
+                    <td>{fmt(r.range, 1)}</td>
+                    <td>{fmt(r.mss, 1)}</td>
+                    <td><span className={`badge ${(r.confidence_bin || '').replace(/\s+/g, '-').toLowerCase()}`}>{r.confidence_bin || '\u2014'}</span></td>
+                    <td>
+                      {r.suggested_play ? (
+                        <span className="play-badge">{r.suggested_side === 'home' ? r.home_team : r.away_team} {fmtLine(fmt(spreadForSide(r.suggested_line, r.suggested_side), 1))}</span>
+                      ) : '\u2014'}
+                    </td>
+                    <td>{r.valid_model_count ?? '\u2014'}</td>
+                    <td className={r.tv_network == null ? 'dim' : ''}>{r.tv_network ?? '\u2014'}</td>
+                    <td className="center no-print">
+                      <input
+                        type="checkbox"
+                        checked={r.pick?.status === 'lean'}
+                        disabled={r.pick?.status === 'official'}
+                        onChange={() => toggleLean(r)}
+                        title={r.pick?.status === 'official' ? 'Already an official play' : 'Mark as a lean'}
+                      />
+                    </td>
+                    <td className="center no-print">
+                      {r.pick?.status === 'official' ? (
+                        <button className="chip" onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}>
+                          {r.pick.pick_type === 'total'
+                            ? `${r.pick.side === 'over' ? 'O' : 'U'} ${r.pick.line_played}`
+                            : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`} {r.pick.units}u
+                        </button>
+                      ) : (
+                        <button className="add-btn" onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}>+</button>
+                      )}
+                    </td>
+                    <td className="center no-print">
+                      <button className={`note-btn ${r.pick?.note ? 'has-note' : ''}`} onClick={() => setNoteModalGame(r)} title={r.pick?.note ? 'Edit note' : 'Add note'}>
+                        {r.pick?.note ? '\ud83d\udcdd' : '\uff0b'}
+                      </button>
+                    </td>
+                  </tr>
                 ))}
                 {sorted.length === 0 && (
-                  <tr><td colSpan={COLS.length} className="empty">No games match current filters.</td></tr>
+                  <tr><td colSpan={COLUMNS.length} className="empty">No games match the current filters.</td></tr>
                 )}
               </tbody>
             </table>
           </div>
+
+          <div className="print-only-cards">
+            {printSorted.map((r) => {
+              const marketFav = fmtFavoredLine(r.vegas_line, r.home_team, r.away_team);
+              const c = consensusPick(r);
+              const edgeAbs = r.edge != null ? Math.abs(parseFloat(r.edge)) : null;
+              return (
+                <div key={r.id} className={`gcard gcard-${(r.confidence_bin || 'very-weak').toLowerCase().replace(/\s+/g, '-')} ${r.suggested_play ? 'gcard-play' : ''} ${r.pick?.status === 'official' ? 'gcard-mine' : ''}`}>
+                  <div className="gc-top">
+                    <span className="gc-rank">#{rankByGameId[r.id]}</span>
+                    <span className="gc-time">{fmtKickoffPrint(r.kickoff_at)}</span>
+                    <span className="gc-tv">{r.tv_network ?? ''}</span>
+                  </div>
+                  <div className="gc-matchup">
+                    <TeamLogo src={logos[r.away_team]} alt={r.away_team} />
+                    {r.away_team} @ {r.home_team}
+                    <TeamLogo src={logos[r.home_team]} alt={r.home_team} />
+                  </div>
+                  <div className="gc-line">
+                    Market: <b>{marketFav}</b> &nbsp;\u00b7&nbsp; O/U {r.over_under ?? '\u2014'}
+                    {r.line_move !== null && Math.abs(r.line_move) >= 0.5 && (
+                      <span className={r.line_move > 0 ? 'gc-up' : 'gc-down'}>
+                        {' '}({r.line_move > 0 ? '\u25b2' : '\u25bc'}{Math.abs(r.line_move).toFixed(1)} since open)
+                      </span>
+                    )}
+                  </div>
+                  {c && (
+                    <div className="gc-story">
+                      Model likes <TeamLogo src={logos[c.team]} alt={c.team} /><b>{c.team} {fmtLine(fmt(c.num, 1))}</b>
+                      <span className={edgeAbs !== null && edgeAbs >= 1.5 ? 'gc-edge-strong' : 'gc-edge'}> (edge {fmtLine(fmt(r.edge, 1))})</span>.
+                      {r.agreement !== null && ` ${fmt(r.agreement, 0)}% of top-7 agree`}
+                      {r.agreement_all_pct !== null && ` (${fmt(r.agreement_all_pct, 0)}% of all ${r.valid_model_count}).`}
+                    </div>
+                  )}
+                  <div className="gc-stats">
+                    StdDev {fmt(r.stddev, 1)} \u00b7 Range {fmt(r.range, 1)} \u00b7 MSS {fmt(r.mss, 1)} \u00b7 <span className="gc-conf">{r.confidence_bin || '\u2014'}</span>
+                  </div>
+                  {r.suggested_play && (
+                    <div className="gc-badge">\u2605 MODEL PLAY: {r.suggested_side === 'home' ? r.home_team : r.away_team} {fmtLine(fmt(spreadForSide(r.suggested_line, r.suggested_side), 1))}</div>
+                  )}
+                  {r.pick?.status === 'official' && (
+                    <div className="gc-badge gc-badge-mine">
+                      \u2691 MY PLAY: {r.pick.pick_type === 'total'
+                        ? `${r.pick.side === 'over' ? 'Over' : 'Under'} ${r.pick.line_played}`
+                        : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`} ({r.pick.units}u)
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </>
       )}
 
-      <style jsx>{`
-        .fc { display: flex; flex-direction: column; gap: 3px; }
-        .fc label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #8a92a3; }
-        .checkbox-fc { justify-content: flex-end; }
-        .checkbox-fc label { flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: #e6e9ef; text-transform: none; cursor: pointer; padding-bottom: 7px; }
+      {pickModalGame && (
+        <PickModal
+          game={pickModalGame}
+          existing={pickModalGame.pick}
+          defaultStatus={pickModalDefaultStatus}
+          onClose={() => setPickModalGame(null)}
+          onSaved={refreshAfterPickChange}
+          onDeleted={refreshAfterPickChange}
+        />
+      )}
 
-        @media (max-width: 768px) {
-          .tbl-wrap { font-size: 12px; }
+      {noteModalGame && (
+        <NoteModal
+          game={noteModalGame}
+          existing={noteModalGame.pick}
+          onClose={() => setNoteModalGame(null)}
+          onSaved={() => { setNoteModalGame(null); loadWeek(); }}
+        />
+      )}
+
+      <style jsx global>{`
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #0b0e14; color: #e6e9ef; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .tooltip-fixed {
+          position: fixed; transform: translateX(-50%); width: 220px; background: #1a1e2b;
+          border: 1px solid #2a3042; color: #d3d8e2; font-size: 11px; font-weight: 400;
+          line-height: 1.5; padding: 8px 10px; border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+          z-index: 1000; white-space: normal; pointer-events: none;
         }
+        .team-logo { width: 16px; height: 16px; object-fit: contain; vertical-align: middle; margin: 0 4px; }
+        .consensus-cell { display: inline-flex; align-items: center; gap: 2px; }
+        .print-header { display: none; }
+        .print-only-cards { display: none; }
+        @media print {
+          @page { size: landscape; margin: 8mm; }
+          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+          .no-print, .info-icon { display: none !important; }
+          body { background: #fff !important; color: #000 !important; }
+          .wrap { max-width: 100% !important; padding: 0 !important; }
+          .print-header { display: block !important; margin-bottom: 8px; }
+          .print-title { font-size: 16px; font-weight: 700; color: #000; }
+          .print-sub { font-size: 9px; color: #555; margin-top: 1px; }
+          .screen-only-table { display: none !important; }
+          .print-only-cards {
+            display: grid !important;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+          }
+          .gcard {
+            border: 1px solid #ccc; border-left: 3px solid #bbb; border-radius: 3px; padding: 5px 7px;
+            break-inside: avoid; color: #000; background: #fff;
+          }
+          .gcard-very-strong { border-left-color: #059669; }
+          .gcard-strong { border-left-color: #10b981; }
+          .gcard-moderate { border-left-color: #d97706; }
+          .gcard-weak { border-left-color: #94a3b8; }
+          .gcard-very-weak { border-left-color: #d1d5db; }
+          .gcard-play { border: 1px solid #059669; border-left: 3px solid #059669; background: #ecfdf5; }
+          .gcard-mine { box-shadow: inset 0 0 0 1px #2563eb; }
+          .gc-top {
+            display: flex; justify-content: space-between; align-items: baseline;
+            font-size: 7.5px; color: #666; margin-bottom: 2px;
+          }
+          .gc-rank { font-weight: 700; color: #000; }
+          .gc-matchup {
+            font-size: 11px; font-weight: 700; margin-bottom: 2px;
+            display: flex; align-items: center; gap: 3px;
+          }
+          .gc-line { font-size: 8.5px; margin-bottom: 3px; color: #333; }
+          .gc-up { color: #059669; }
+          .gc-down { color: #dc2626; }
+          .gc-story { font-size: 8px; line-height: 1.35; margin-bottom: 3px; color: #222; }
+          .gc-edge { color: #444; }
+          .gc-edge-strong { color: #059669; font-weight: 700; }
+          .gc-stats { font-size: 7.5px; color: #555; margin-bottom: 2px; }
+          .gc-conf { font-weight: 700; }
+          .gcard-very-strong .gc-conf, .gcard-strong .gc-conf { color: #059669; }
+          .gcard-moderate .gc-conf { color: #b45309; }
+          .gcard-weak .gc-conf, .gcard-very-weak .gc-conf { color: #6b7280; }
+          .gc-badge {
+            font-size: 8.5px; font-weight: 700; border-radius: 3px;
+            padding: 2px 5px; margin-top: 3px; display: inline-block;
+            border: 1px solid #059669; background: #d1fae5; color: #065f46;
+          }
+          .gc-badge-mine { border: 1px solid #2563eb; background: #dbeafe; color: #1e3a8a; margin-left: 4px; }
+        }
+      `}</style>
+      <style jsx>{`
+        .wrap { max-width: 1600px; margin: 0 auto; padding: 32px 20px 60px; }
+        .header-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+        header h1 { font-size: 26px; margin: 0 0 4px; font-weight: 700; }
+        .sub { color: #8a92a3; margin: 0 0 24px; font-size: 14px; }
+        .header-actions { display: flex; gap: 8px; }
+        .toggle-btn { background: #131722; border: 1px solid #2a3042; color: #e6e9ef; padding: 8px 14px; border-radius: 8px; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+        .toggle-btn:hover { border-color: #38bd94; }
+        .print-btn { }
+        .count-badge { background: #38bd94; color: #0b0e14; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 10px; }
+        .panel { background: #131722; border: 1px solid #232838; border-radius: 10px; padding: 16px 20px; margin-bottom: 16px; }
+        .panel-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .panel h2 { font-size: 15px; margin: 0; }
+        .card-filters { display: flex; gap: 8px; }
+        .card-filters select { background: #0b0e14; border: 1px solid #2a3042; color: #e6e9ef; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
+        .empty-note { color: #5b6272; font-size: 13px; margin: 0; }
+        .card-list { display: flex; flex-direction: column; gap: 8px; }
+        .card-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #0b0e14; border-radius: 8px; border: 1px solid #1a1e2b; }
+        .card-matchup { font-size: 13px; font-weight: 600; }
+        .card-pick { font-size: 12px; color: #8a92a3; margin-top: 2px; }
+        .result-badge { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px; text-transform: uppercase; }
+        .result-badge.win { background: rgba(56,189,148,0.15); color: #38bd94; }
+        .result-badge.loss { background: rgba(248,113,113,0.15); color: #f87171; }
+        .result-badge.push { background: rgba(148,163,184,0.15); color: #94a3b8; }
+        .stats-row { display: flex; gap: 28px; flex-wrap: wrap; }
+        .stat { display: flex; flex-direction: column; gap: 2px; }
+        .stat-num { font-size: 22px; font-weight: 700; }
+        .stat-num.pos { color: #38bd94; }
+        .stat-num.neg { color: #f87171; }
+        .stat-label { font-size: 11px; color: #8a92a3; text-transform: uppercase; letter-spacing: 0.04em; }
+        .controls { display: flex; flex-wrap: wrap; gap: 16px; background: #131722; border: 1px solid #232838; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+        .control { display: flex; flex-direction: column; gap: 4px; }
+        .control.checkbox { justify-content: flex-end; }
+        .control label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #8a92a3; }
+        .control input[type='text'], .control input[type='number'], .control select { background: #0b0e14; border: 1px solid #2a3042; color: #e6e9ef; padding: 7px 10px; border-radius: 6px; font-size: 14px; width: 110px; }
+        .control input[type='text'] { width: 160px; }
+        .control.checkbox label { text-transform: none; font-size: 14px; color: #e6e9ef; display: flex; align-items: center; gap: 6px; padding-bottom: 7px; }
+        .status { padding: 40px 0; text-align: center; color: #8a92a3; }
+        .status.error { color: #f87171; }
+        .count { color: #8a92a3; font-size: 13px; margin-bottom: 8px; }
+        .table-wrap { overflow-x: auto; border: 1px solid #232838; border-radius: 10px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
+        thead th { text-align: left; padding: 10px 12px; background: #131722; border-bottom: 1px solid #232838; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #8a92a3; }
+        th.sortable { cursor: pointer; user-select: none; }
+        th.sortable:hover { color: #e6e9ef; }
+        th.sticky-col { position: sticky; left: 0; z-index: 3; background: #131722; box-shadow: 3px 0 6px rgba(0,0,0,0.5); }
+        td.sticky-col { position: sticky; left: 0; z-index: 2; background: #0b0e14; box-shadow: 3px 0 6px rgba(0,0,0,0.5); }
+        td.sticky-col.play-row-bg { background: #0d1710; }
+        tbody td { padding: 9px 12px; border-bottom: 1px solid #1a1e2b; }
+        td.center { text-align: center; }
+        tbody tr:hover td { background: #131722; }
+        tbody tr:hover td.sticky-col { background: #1a1e2b; }
+        tr.play-row:hover td.sticky-col { background: #0f1e18; }
+        tr.play-row { background: rgba(56, 189, 148, 0.06); }
+        tr.play-row:hover { background: rgba(56, 189, 148, 0.12); }
+        td.matchup { font-weight: 600; }
+        td.dim { color: #5b6272; }
+        td.strong { color: #38bd94; font-weight: 700; }
+        .move { font-size: 11px; margin-left: 4px; }
+        .move.up { color: #38bd94; }
+        .move.down { color: #f87171; }
+        .rank-cell { font-weight: 700; color: #8a92a3; text-align: center; }
+        .move-up { color: #38bd94; }
+        .move-down { color: #f87171; }
+        .badge { padding: 3px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; background: #232838; color: #b8bfcc; }
+        .badge.very-strong { background: rgba(56, 189, 148, 0.18); color: #38bd94; }
+        .badge.strong { background: rgba(56, 189, 148, 0.12); color: #38bd94; }
+        .badge.moderate { background: rgba(250, 204, 21, 0.14); color: #facc15; }
+        .badge.weak { background: rgba(148, 163, 184, 0.14); color: #94a3b8; }
+        .badge.very-weak { background: rgba(148, 163, 184, 0.08); color: #6b7280; }
+        .play-badge { background: rgba(56, 189, 148, 0.14); color: #38bd94; padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 12px; }
+        .empty { text-align: center; color: #5b6272; padding: 30px !important; }
+        .add-btn { width: 26px; height: 26px; border-radius: 6px; border: 1px dashed #2a3042; background: transparent; color: #8a92a3; cursor: pointer; font-size: 14px; }
+        .add-btn:hover { border-color: #38bd94; color: #38bd94; }
+        .chip { background: rgba(56,189,148,0.12); color: #38bd94; border: 1px solid rgba(56,189,148,0.3); border-radius: 6px; padding: 4px 8px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+        .note-btn { width: 26px; height: 26px; border-radius: 6px; border: 1px solid transparent; background: transparent; cursor: pointer; font-size: 13px; color: #5b6272; }
+        .note-btn.has-note { color: #facc15; }
+        .note-btn:hover { border-color: #2a3042; }
       `}</style>
     </div>
   );
 }
-
-function RangeFilter({ label, minVal, maxVal, onMin, onMax, step, placeholder }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <label style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.04em', color: '#8a92a3' }}>{label}</label>
-      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-        <input type="number" step={step} placeholder={placeholder} value={minVal} onChange={e => onMin(e.target.value)} style={{ ...inputStyle, width: 80 }} />
-        <span style={{ color: '#5b6272', fontSize: 11 }}>to</span>
-        <input type="number" step={step} placeholder={placeholder} value={maxVal} onChange={e => onMax(e.target.value)} style={{ ...inputStyle, width: 80 }} />
-      </div>
-    </div>
-  );
-}
-
-function GameRow({ row: r, rank, season, week, onPickChange }) {
-  const [saving, setSaving] = useState(false);
-
-  const sideLabel = r.suggested_side === 'home' ? r.home_team : r.away_team;
-  const confClass = CONF_BADGE_CLASS[r.confidence_bin] || '';
-  const hasMyPick = !!r.pick?.played || r.pick?.status === 'official';
-  const isLock = !!r.pick?.is_lock;
-
-  async function togglePlay() {
-    setSaving(true);
-    try {
-      if (r.pick) {
-        // toggle off
-        const resp = await fetch(`https://zpmdrazbqgzheqkvfltv.supabase.co/rest/v1/user_picks?id=eq.${r.pick.id}`, {
-          method: 'DELETE',
-          headers: { apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpwbWRyYXpicWd6aGVxa3ZmbHR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgzMDY0MjksImV4cCI6MjEwMzg4MjQyOX0.NnVqnpyXRuu5zVpYa12NZ1jl24u2dPWL2vkiQKghuag', Authorization: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpwbWRyYXpicWd6aGVxa3ZmbHR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgzMDY0MjksImV4cCI6MjEwMzg4MjQyOX0.NnVqnpyXRuu5zVpYa12NZ1jl24u2dPWL2vkiQKghuag' },
-        });
-      } else if (r.suggested_play) {
-        // add suggested play
-        await fetch('https://zpmdrazbqgzheqkvfltv.supabase.co/rest/v1/user_picks', {
-          method: 'POST',
-          headers: { apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpwbWRyYXpicWd6aGVxa3ZmbHR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgzMDY0MjksImV4cCI6MjEwMzg4MjQyOX0.NnVqnpyXRuu5zVpYa12NZ1jl24u2dPWL2vkiQKghuag', Authorization: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpwbWRyYXpicWd6aGVxa3ZmbHR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgzMDY0MjksImV4cCI6MjEwMzg4MjQyOX0.NnVqnpyXRuu5zVpYa12NZ1jl24u2dPWL2vkiQKghuag', 'Content-Type': 'application/json' },
-          body: JSON.stringify({ game_id: r.id, season, week, played: true, status: 'official', side: r.suggested_side, line_played: r.suggested_line, pick_type: 'spread' }),
-        });
-      }
-      onPickChange();
-    } finally { setSaving(false); }
-  }
-
-  return (
-    <tr className={isLock ? 'is-lock' : r.suggested_play ? 'is-play' : ''}>
-      <td className="sticky-col" style={{ color: '#5b6272', fontWeight: 600, width: 44, minWidth: 44 }}>{rank}</td>
-      <td className="sticky-col-2" style={{ minWidth: 200 }}>
-        <div style={{ fontWeight: 700 }}>{r.away_team}</div>
-        <div style={{ fontSize: 11, color: '#8a92a3' }}>@ {r.home_team}</div>
-      </td>
-      <td style={{ color: '#8a92a3', fontSize: 12 }}>{fmtKickoff(r.kickoff_at)}</td>
-      <td>{fmtLine(r.vegas_line)}</td>
-      <td>{r.over_under ?? '—'}</td>
-      <td>{fmtLine(r.consensus_spread)}</td>
-      <td style={{ color: r.edge !== null && Math.abs(parseFloat(r.edge)) >= 1.5 ? '#38bd94' : 'inherit', fontWeight: r.edge !== null && Math.abs(parseFloat(r.edge)) >= 1.5 ? 700 : 400 }}>
-        {fmtLine(r.edge)}
-      </td>
-      <td>{r.agreement !== null ? `${fmt(r.agreement, 0)}%` : '—'}</td>
-      <td>{fmt(r.stddev, 2)}</td>
-      <td>{fmt(r.mss, 1)}</td>
-      <td><span className={`badge ${confClass}`}>{r.confidence_bin ?? '—'}</span></td>
-      <td>
-        {r.suggested_play
-          ? <span className="play-badge">{sideLabel} {fmtLine(r.suggested_line)}</span>
-          : <span style={{ color: '#3a404e' }}>—</span>}
-      </td>
-      <td style={{ color: '#5b6272' }}>{r.valid_model_count ?? '—'}</td>
-      <td style={{ color: '#5b6272', fontSize: 12 }}>{r.tv_network ?? '—'}</td>
-      <td>
-        {hasMyPick
-          ? <div style={{ display: 'flex', gap: 4 }}>
-            <span className={isLock ? 'lock-badge' : 'play-badge'} style={{ fontSize: 11 }}>
-              {isLock ? '🔒 ' : ''}{r.pick?.side === 'home' ? r.home_team : r.away_team}
-            </span>
-            <button className="btn btn-danger" style={{ fontSize: 10, padding: '3px 8px' }} onClick={togglePlay} disabled={saving}>✕</button>
-          </div>
-          : r.suggested_play
-            ? <button className="btn btn-primary" style={{ fontSize: 11, padding: '4px 10px' }} onClick={togglePlay} disabled={saving}>+ Add</button>
-            : <a href="/my-card" style={{ fontSize: 11, color: '#3a404e' }}>Manual</a>
-        }
-      </td>
-    </tr>
-  );
-}
-
-const inputStyle = {
-  background: '#0b0e14', border: '1px solid #2a3042', color: '#e6e9ef',
-  padding: '7px 10px', borderRadius: 6, fontSize: 13, width: 110,
-};
