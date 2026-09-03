@@ -37,46 +37,46 @@ const COLUMNS = [
 ];
 
 const TOOLTIPS = {
-  rank: 'Games ranked 1\u2013N by Model Strength Score (MSS), the same backtested composite metric used for confidence \u2014 not a separate ad-hoc formula. #1 is the strongest signal this week.',
+  rank: 'Games ranked 1–N by Model Strength Score (MSS), the same backtested composite metric used for confidence — not a separate ad-hoc formula. #1 is the strongest signal this week.',
   matchup: 'Away team @ home team.',
   kickoff_at: 'Scheduled kickoff time, shown in Eastern Time.',
   vegas_line: 'The favored team and current market spread.',
   line_move: 'How many points the market has moved since the line opened. Positive = moved toward the home team; negative = moved toward the away team.',
   over_under: 'The market total (combined predicted points for both teams) from sportsbook lines.',
-  consensus_spread: "BobbyCFB's weighted-average predicted spread, shown as the team and price the model itself would favor \u2014 same side as the Edge, converted to standard sportsbook notation (favorite negative, underdog positive).",
-  edge: 'Consensus spread minus the Vegas line. The size of the disagreement between the model consensus and the market \u2014 the core signal this system is built around.',
+  consensus_spread: "BobbyCFB's weighted-average predicted spread, shown as the team and price the model itself would favor — same side as the Edge, converted to standard sportsbook notation (favorite negative, underdog positive).",
+  edge: 'Consensus spread minus the Vegas line. The size of the disagreement between the model consensus and the market — the core signal this system is built around.',
   agreement: 'The fraction of the Top-K model pool (the ~7 models actually used for the consensus) whose prediction falls on the same side of the market line as the edge, with the team that direction favors and the raw count.',
-  agreement_all_pct: 'The same agreement calculation, but across every model that submitted a prediction this week (not just the Top-K pool used for consensus). Useful as a sanity check \u2014 if Top-K and All disagree sharply, the Top-K pool may be an outlier relative to the wider field.',
+  agreement_all_pct: 'The same agreement calculation, but across every model that submitted a prediction this week (not just the Top-K pool used for consensus). Useful as a sanity check — if Top-K and All disagree sharply, the Top-K pool may be an outlier relative to the wider field.',
   stddev: 'Standard deviation of predicted spreads across the selected top models. Lower means the models are tightly clustered; higher means they disagree with each other.',
-  range: 'The spread between the most bullish and most bearish top-model prediction (max \u2212 min). A tight range means all the top models are in the same neighborhood; a wide range can mean one outlier is skewing StdDev without the whole group actually disagreeing.',
-  mss: 'Model Strength Score \u2014 a composite confidence score combining edge size, agreement, and variance. Higher MSS means a stronger, more reliable signal.',
-  confidence_bin: 'A qualitative bucket (Very Strong \u2192 Very Weak) derived from MSS, for quick scanning. The backtested qualification filter (Edge \u22651.5, StdDev \u22642.5, Agreement \u226585%) is what actually flags a Model Play \u2014 not this bucket alone.',
-  suggested_play: 'Whether this game passes the backtested qualification filter (Edge \u22651.5, StdDev \u22642.5, Agreement \u226585%), which historically hit ~58% ATS across 2021\u20132025 backtesting. This is the model\u2019s pick, separate from your own.',
+  range: 'The spread between the most bullish and most bearish top-model prediction (max − min). A tight range means all the top models are in the same neighborhood; a wide range can mean one outlier is skewing StdDev without the whole group actually disagreeing.',
+  mss: 'Model Strength Score — a composite confidence score combining edge size, agreement, and variance. Higher MSS means a stronger, more reliable signal.',
+  confidence_bin: 'A qualitative bucket (Very Strong → Very Weak) derived from MSS, for quick scanning. The backtested qualification filter (Edge ≥1.5, StdDev ≤2.5, Agreement ≥85%) is what actually flags a Model Play — not this bucket alone.',
+  suggested_play: 'Whether this game passes the backtested qualification filter (Edge ≥1.5, StdDev ≤2.5, Agreement ≥85%), which historically hit ~58% ATS across 2021–2025 backtesting. This is the model's pick, separate from your own.',
   valid_model_count: 'How many of the ~30+ source systems submitted a usable prediction for this game.',
   tv_network: 'Broadcast network airing the game, where available.',
-  lean: 'A quick, informal flag for games you\u2019re leaning toward but haven\u2019t committed to. Not counted in your official season record.',
-  play: 'Your official play for this game \u2014 the side, bet type, and unit size you\u2019re actually tracking for season results.',
-  notes: 'Your private notes on this game \u2014 injuries, weather, anything worth remembering.',
+  lean: 'A quick, informal flag for games you're leaning toward but haven't committed to. Not counted in your official season record.',
+  play: 'Your official play for this game — the side, bet type, and unit size you're actually tracking for season results.',
+  notes: 'Your private notes on this game — injuries, weather, anything worth remembering.',
 };
 
 function fmt(n, digits = 1) {
-  if (n === null || n === undefined) return '\u2014';
+  if (n === null || n === undefined) return '—';
   const num = typeof n === 'string' ? parseFloat(n) : n;
-  if (Number.isNaN(num)) return '\u2014';
+  if (Number.isNaN(num)) return '—';
   return num.toFixed(digits);
 }
 
 function fmtLine(n) {
-  if (n === null || n === undefined) return '\u2014';
+  if (n === null || n === undefined) return '—';
   const num = typeof n === 'string' ? parseFloat(n) : n;
-  if (Number.isNaN(num)) return '\u2014';
+  if (Number.isNaN(num)) return '—';
   return num > 0 ? `+${num}` : `${num}`;
 }
 
 function fmtFavoredLine(line, homeTeam, awayTeam) {
-  if (line === null || line === undefined) return '\u2014';
+  if (line === null || line === undefined) return '—';
   const num = typeof line === 'string' ? parseFloat(line) : line;
-  if (Number.isNaN(num)) return '\u2014';
+  if (Number.isNaN(num)) return '—';
   if (num === 0) return "Pick'em";
   if (num > 0) return `${homeTeam} -${num}`;
   return `${awayTeam} -${Math.abs(num)}`;
@@ -344,10 +344,10 @@ function PickModal({ game, existing, defaultStatus, onClose, onSaved, onDeleted 
         ) : (
           <div className="sidepick">
             <button className={side === 'over' ? 'on' : ''} onClick={() => setSide('over')}>
-              Over<span>{game.over_under ?? '\u2014'}</span>
+              Over<span>{game.over_under ?? '—'}</span>
             </button>
             <button className={side === 'under' ? 'on' : ''} onClick={() => setSide('under')}>
-              Under<span>{game.over_under ?? '\u2014'}</span>
+              Under<span>{game.over_under ?? '—'}</span>
             </button>
           </div>
         )}
@@ -372,7 +372,7 @@ function PickModal({ game, existing, defaultStatus, onClose, onSaved, onDeleted 
         <div className="actions">
           {existing && <button className="danger" onClick={handleDelete} disabled={saving}>Remove</button>}
           <button className="ghost" onClick={onClose} disabled={saving}>Cancel</button>
-          <button className="primary" onClick={handleSave} disabled={saving || !side}>{saving ? 'Saving\u2026' : 'Save'}</button>
+          <button className="primary" onClick={handleSave} disabled={saving || !side}>{saving ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
 
@@ -426,11 +426,11 @@ function NoteModal({ game, existing, onClose, onSaved }) {
   return createPortal(
     <div className="overlay">
       <div className="modal" ref={ref}>
-        <h3>Notes \u2014 {game.away_team} @ {game.home_team}</h3>
-        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} placeholder="Injuries, weather, matchup notes\u2026" />
+        <h3>Notes — {game.away_team} @ {game.home_team}</h3>
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} placeholder="Injuries, weather, matchup notes…" />
         <div className="actions">
           <button className="ghost" onClick={onClose} disabled={saving}>Cancel</button>
-          <button className="primary" onClick={handleSave} disabled={saving}>{saving ? 'Saving\u2026' : 'Save'}</button>
+          <button className="primary" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
       <style jsx>{`
@@ -485,18 +485,27 @@ export default function Dashboard() {
     setError(null);
     try {
       const gamesUrl = `${SUPABASE_URL}/rest/v1/games?select=id,home_team,away_team,kickoff_at,current_line,opening_line,closing_line,over_under,tv_network,status,home_score,away_score,game_metrics(id,vegas_line,consensus_spread,edge,agreement,stddev,mss,confidence_bin,suggested_play,suggested_side,suggested_line,valid_model_count,actual_k,topk_model_ids)&season=eq.${season}&week=eq.${week}`;
-      const picksUrl = `${SUPABASE_URL}/rest/v1/user_picks?select=*,games!inner(season,week)&games.season=eq.${season}&games.week=eq.${week}`;
       const logosUrl = `${SUPABASE_URL}/rest/v1/team_logos?select=team_name,logo_url`;
 
-      const [gamesRes, picksRes, logosRes] = await Promise.all([
+      const [gamesRes, logosRes] = await Promise.all([
         fetch(gamesUrl, { headers: SB_HEADERS }),
-        fetch(picksUrl, { headers: SB_HEADERS }),
         fetch(logosUrl, { headers: SB_HEADERS }),
       ]);
       if (!gamesRes.ok) throw new Error(`Supabase error ${gamesRes.status}`);
       const gamesData = await gamesRes.json();
-      const picksData = picksRes.ok ? await picksRes.json() : [];
       const logosData = logosRes.ok ? await logosRes.json() : [];
+
+      // Fetch picks filtered to only this week's game IDs — fixes stale picks
+      // from other weeks showing on My Card.
+      let picksData = [];
+      if (gamesData.length > 0) {
+        const ids = gamesData.map((g) => g.id).join(',');
+        const picksRes = await fetch(
+          `${SUPABASE_URL}/rest/v1/user_picks?select=*&game_id=in.(${ids})`,
+          { headers: SB_HEADERS }
+        );
+        if (picksRes.ok) picksData = await picksRes.json();
+      }
 
       const byGame = {};
       for (const p of picksData) byGame[p.game_id] = p;
@@ -768,7 +777,7 @@ export default function Dashboard() {
       <header>
         <div className="header-top">
           <div>
-            <h1>BobbyCFB \u2014 Weekly Dashboard</h1>
+            <h1>BobbyCFB — Weekly Dashboard</h1>
             <p className="sub">Consensus spreads, edge &amp; qualification signals across all games</p>
           </div>
           <div className="header-actions no-print">
@@ -785,12 +794,12 @@ export default function Dashboard() {
               Season Stats
             </button>
             <button className="toggle-btn print-btn" onClick={() => window.print()}>
-              \ud83d\udda8\ufe0f Print
+              🖨️ Print
             </button>
           </div>
         </div>
         <div className="print-header">
-          <div className="print-title">BobbyCFB \u2014 Week {week}, {season}</div>
+          <div className="print-title">BobbyCFB — Week {week}, {season}</div>
           <div className="print-sub">Generated {new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}</div>
         </div>
       </header>
@@ -798,7 +807,7 @@ export default function Dashboard() {
       {showMyCard && (
         <div className="panel no-print">
           <div className="panel-head">
-            <h2>My Card \u2014 Week {week}</h2>
+            <h2>My Card — Week {week}</h2>
             <div className="card-filters">
               <select value={cardConfFilter} onChange={(e) => setCardConfFilter(e.target.value)}>
                 <option value="All">All confidence</option>
@@ -828,7 +837,7 @@ export default function Dashboard() {
                   <div key={r.id} className="card-item">
                     <div>
                       <div className="card-matchup">{r.matchup}</div>
-                      <div className="card-pick">{label} \u00b7 {r.pick.units}u{clv !== null ? ` \u00b7 CLV ${clv >= 0 ? '+' : ''}${clv.toFixed(1)}` : ''}</div>
+                      <div className="card-pick">{label} · {r.pick.units}u{clv !== null ? ` · CLV ${clv >= 0 ? '+' : ''}${clv.toFixed(1)}` : ''}</div>
                     </div>
                     {result && <span className={`result-badge ${result}`}>{result}</span>}
                   </div>
@@ -841,24 +850,24 @@ export default function Dashboard() {
 
       {showSeasonStats && (
         <div className="panel no-print">
-          <h2>Season Stats \u2014 {season}</h2>
-          {seasonLoading && <p className="empty-note">Loading\u2026</p>}
+          <h2>Season Stats — {season}</h2>
+          {seasonLoading && <p className="empty-note">Loading…</p>}
           {!seasonLoading && seasonRecord && (
             <div className="stats-row">
               <div className="stat"><span className="stat-num">{seasonRecord.w}-{seasonRecord.l}{seasonRecord.p ? `-${seasonRecord.p}` : ''}</span><span className="stat-label">Record</span></div>
-              <div className="stat"><span className="stat-num">{seasonRecord.total ? `${((seasonRecord.w / (seasonRecord.w + seasonRecord.l || 1)) * 100).toFixed(1)}%` : '\u2014'}</span><span className="stat-label">Win %</span></div>
+              <div className="stat"><span className="stat-num">{seasonRecord.total ? `${((seasonRecord.w / (seasonRecord.w + seasonRecord.l || 1)) * 100).toFixed(1)}%` : '—'}</span><span className="stat-label">Win %</span></div>
               <div className="stat"><span className={`stat-num ${seasonRecord.unitsNet >= 0 ? 'pos' : 'neg'}`}>{seasonRecord.unitsNet >= 0 ? '+' : ''}{seasonRecord.unitsNet.toFixed(1)}u</span><span className="stat-label">Units (straight, no vig)</span></div>
               <div className="stat"><span className="stat-num">{seasonRecord.total}</span><span className="stat-label">Graded Plays</span></div>
               <div className="stat">
                 <span className={`stat-num ${seasonRecord.avgClv == null ? '' : seasonRecord.avgClv >= 0 ? 'pos' : 'neg'}`}>
-                  {seasonRecord.avgClv == null ? '\u2014' : `${seasonRecord.avgClv >= 0 ? '+' : ''}${seasonRecord.avgClv.toFixed(2)}`}
+                  {seasonRecord.avgClv == null ? '—' : `${seasonRecord.avgClv >= 0 ? '+' : ''}${seasonRecord.avgClv.toFixed(2)}`}
                 </span>
                 <span className="stat-label">Avg CLV ({seasonRecord.clvCount} graded)</span>
               </div>
             </div>
           )}
           {!seasonLoading && seasonRecord && seasonRecord.total === 0 && (
-            <p className="empty-note">No graded official plays yet this season \u2014 results populate once games go final.</p>
+            <p className="empty-note">No graded official plays yet this season — results populate once games go final.</p>
           )}
         </div>
       )}
@@ -896,7 +905,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {loading && <div className="status">Loading\u2026</div>}
+      {loading && <div className="status">Loading…</div>}
       {error && <div className="status error">Error: {error}</div>}
 
       {!loading && !error && (
@@ -910,7 +919,7 @@ export default function Dashboard() {
                     <th key={c.key} onClick={() => c.sortable && toggleSort(c.key)} className={`${c.sortable ? 'sortable' : ''} ${c.sticky ? 'sticky-col' : ''} ${['lean', 'play', 'notes'].includes(c.key) ? 'no-print' : ''}`}>
                       {c.label}
                       {TOOLTIPS[c.key] && <InfoIcon text={TOOLTIPS[c.key]} />}
-                      {sortKey === c.key ? (sortDir === 'asc' ? ' \u25b2' : ' \u25bc') : ''}
+                      {sortKey === c.key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
                     </th>
                   ))}
                 </tr>
@@ -927,9 +936,9 @@ export default function Dashboard() {
                     <td>{fmtKickoff(r.kickoff_at)}</td>
                     <td>{fmtFavoredLine(r.vegas_line, r.home_team, r.away_team)}</td>
                     <td className={r.line_move !== null && Math.abs(r.line_move) >= 0.5 ? (r.line_move > 0 ? 'move-up' : 'move-down') : 'dim'}>
-                      {r.line_move !== null ? `${r.line_move > 0 ? '\u25b2 ' : r.line_move < 0 ? '\u25bc ' : ''}${Math.abs(r.line_move).toFixed(1)}` : '\u2014'}
+                      {r.line_move !== null ? `${r.line_move > 0 ? '▲ ' : r.line_move < 0 ? '▼ ' : ''}${Math.abs(r.line_move).toFixed(1)}` : '—'}
                     </td>
-                    <td className={r.over_under == null ? 'dim' : ''}>{r.over_under ?? '\u2014'}</td>
+                    <td className={r.over_under == null ? 'dim' : ''}>{r.over_under ?? '—'}</td>
                     <td>
                       {(() => {
                         const c = consensusPick(r);
@@ -938,23 +947,23 @@ export default function Dashboard() {
                             <TeamLogo src={logos[c.team]} alt={c.team} />
                             {c.team} {fmtLine(fmt(c.num, 2))}
                           </span>
-                        ) : '\u2014';
+                        ) : '—';
                       })()}
                     </td>
                     <td className={r.edge !== null && Math.abs(parseFloat(r.edge)) >= 1.5 ? 'strong' : ''}>{fmtLine(fmt(r.edge, 2))}</td>
-                    <td>{r.agreement !== null ? `${r.agree_side} ${fmt(r.agreement, 0)}% (${r.models_agreeing}/${r.actual_k})` : '\u2014'}</td>
-                    <td>{r.agreement_all_pct !== null ? `${r.agree_side} ${fmt(r.agreement_all_pct, 0)}% (${r.agreement_all_count}/${r.agreement_all_total})` : '\u2014'}</td>
+                    <td>{r.agreement !== null ? `${r.agree_side} ${fmt(r.agreement, 0)}% (${r.models_agreeing}/${r.actual_k})` : '—'}</td>
+                    <td>{r.agreement_all_pct !== null ? `${r.agree_side} ${fmt(r.agreement_all_pct, 0)}% (${r.agreement_all_count}/${r.agreement_all_total})` : '—'}</td>
                     <td>{fmt(r.stddev, 2)}</td>
                     <td>{fmt(r.range, 1)}</td>
                     <td>{fmt(r.mss, 1)}</td>
-                    <td><span className={`badge ${(r.confidence_bin || '').replace(/\s+/g, '-').toLowerCase()}`}>{r.confidence_bin || '\u2014'}</span></td>
+                    <td><span className={`badge ${(r.confidence_bin || '').replace(/\s+/g, '-').toLowerCase()}`}>{r.confidence_bin || '—'}</span></td>
                     <td>
                       {r.suggested_play ? (
                         <span className="play-badge">{r.suggested_side === 'home' ? r.home_team : r.away_team} {fmtLine(fmt(spreadForSide(r.suggested_line, r.suggested_side), 1))}</span>
-                      ) : '\u2014'}
+                      ) : '—'}
                     </td>
-                    <td>{r.valid_model_count ?? '\u2014'}</td>
-                    <td className={r.tv_network == null ? 'dim' : ''}>{r.tv_network ?? '\u2014'}</td>
+                    <td>{r.valid_model_count ?? '—'}</td>
+                    <td className={r.tv_network == null ? 'dim' : ''}>{r.tv_network ?? '—'}</td>
                     <td className="center no-print">
                       <input
                         type="checkbox"
@@ -977,7 +986,7 @@ export default function Dashboard() {
                     </td>
                     <td className="center no-print">
                       <button className={`note-btn ${r.pick?.note ? 'has-note' : ''}`} onClick={() => setNoteModalGame(r)} title={r.pick?.note ? 'Edit note' : 'Add note'}>
-                        {r.pick?.note ? '\ud83d\udcdd' : '\uff0b'}
+                        {r.pick?.note ? '📝' : '+'}
                       </button>
                     </td>
                   </tr>
@@ -1007,10 +1016,10 @@ export default function Dashboard() {
                     <TeamLogo src={logos[r.home_team]} alt={r.home_team} />
                   </div>
                   <div className="gc-line">
-                    Market: <b>{marketFav}</b> &nbsp;\u00b7&nbsp; O/U {r.over_under ?? '\u2014'}
+                    Market: <b>{marketFav}</b> &nbsp;·&nbsp; O/U {r.over_under ?? '—'}
                     {r.line_move !== null && Math.abs(r.line_move) >= 0.5 && (
                       <span className={r.line_move > 0 ? 'gc-up' : 'gc-down'}>
-                        {' '}({r.line_move > 0 ? '\u25b2' : '\u25bc'}{Math.abs(r.line_move).toFixed(1)} since open)
+                        {' '}({r.line_move > 0 ? '▲' : '▼'}{Math.abs(r.line_move).toFixed(1)} since open)
                       </span>
                     )}
                   </div>
@@ -1023,14 +1032,14 @@ export default function Dashboard() {
                     </div>
                   )}
                   <div className="gc-stats">
-                    StdDev {fmt(r.stddev, 1)} \u00b7 Range {fmt(r.range, 1)} \u00b7 MSS {fmt(r.mss, 1)} \u00b7 <span className="gc-conf">{r.confidence_bin || '\u2014'}</span>
+                    StdDev {fmt(r.stddev, 1)} · Range {fmt(r.range, 1)} · MSS {fmt(r.mss, 1)} · <span className="gc-conf">{r.confidence_bin || '—'}</span>
                   </div>
                   {r.suggested_play && (
-                    <div className="gc-badge">\u2605 MODEL PLAY: {r.suggested_side === 'home' ? r.home_team : r.away_team} {fmtLine(fmt(spreadForSide(r.suggested_line, r.suggested_side), 1))}</div>
+                    <div className="gc-badge">★ MODEL PLAY: {r.suggested_side === 'home' ? r.home_team : r.away_team} {fmtLine(fmt(spreadForSide(r.suggested_line, r.suggested_side), 1))}</div>
                   )}
                   {r.pick?.status === 'official' && (
                     <div className="gc-badge gc-badge-mine">
-                      \u2691 MY PLAY: {r.pick.pick_type === 'total'
+                      ⚑ MY PLAY: {r.pick.pick_type === 'total'
                         ? `${r.pick.side === 'over' ? 'Over' : 'Under'} ${r.pick.line_played}`
                         : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`} ({r.pick.units}u)
                     </div>
