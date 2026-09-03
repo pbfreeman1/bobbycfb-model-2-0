@@ -880,6 +880,132 @@ export default function Dashboard() {
     if (showSeasonStats) loadSeasonStats();
   }
 
+  function shareCard() {
+    const DPR = 2;
+    const W = 640, PADDING = 28, ROW_H = 64, HEADER_H = 90;
+    const allPicks = [...myCardPicksAll, ...customPlays];
+    const lockRow = myCardPicksAll.find((r) => r.pick?.is_lock);
+    const regularPicks = myCardPicksAll.filter((r) => !r.pick?.is_lock);
+    const totalRows = (lockRow ? 1 : 0) + regularPicks.length + customPlays.length;
+    const CANVAS_H = HEADER_H + (totalRows * ROW_H) + 60 + (customPlays.length > 0 && regularPicks.length > 0 ? 32 : 0);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = W * DPR;
+    canvas.height = Math.max(300, CANVAS_H) * DPR;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(DPR, DPR);
+
+    // Background
+    ctx.fillStyle = '#0b0e14';
+    ctx.fillRect(0, 0, W, canvas.height / DPR);
+
+    // Header bar
+    ctx.fillStyle = '#131722';
+    ctx.fillRect(0, 0, W, HEADER_H - 10);
+    ctx.fillStyle = '#38bd94';
+    ctx.font = 'bold 20px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.fillText('BobbyModels', PADDING, 34);
+    ctx.fillStyle = '#8a92a3';
+    ctx.font = '13px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.fillText(`Week ${week} Card  ·  ${season} Season`, PADDING, 56);
+    // Record summary
+    const graded = allPicks.filter((r) => {
+      const g = r.games || r;
+      return r.pick ? gradePick(r.pick, g) : (r.result && r.result !== null);
+    });
+    const w = allPicks.filter((r) => { const g = r.games || r; return r.pick ? gradePick(r.pick, g) === 'win' : r.result === 'win'; }).length;
+    const l = allPicks.filter((r) => { const g = r.games || r; return r.pick ? gradePick(r.pick, g) === 'loss' : r.result === 'loss'; }).length;
+    if (graded.length > 0) {
+      ctx.fillStyle = w >= l ? '#38bd94' : '#f87171';
+      ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.fillText(`${w}–${l}`, W - PADDING - 60, 38);
+    }
+    ctx.fillStyle = '#232838';
+    ctx.fillRect(0, HEADER_H - 10, W, 1);
+
+    let y = HEADER_H;
+
+    function drawRow(label, sublabel, result, isLock, isCustom) {
+      // Row bg
+      ctx.fillStyle = isLock ? 'rgba(251,191,36,0.08)' : isCustom ? 'rgba(148,163,184,0.04)' : 'rgba(56,189,148,0.04)';
+      ctx.fillRect(PADDING - 8, y, W - (PADDING - 8) * 2, ROW_H - 6);
+      // Left accent bar
+      ctx.fillStyle = isLock ? '#fbbf24' : isCustom ? '#4b5563' : '#38bd94';
+      ctx.fillRect(PADDING - 8, y, 3, ROW_H - 6);
+      // Label
+      ctx.fillStyle = isLock ? '#fbbf24' : '#e6e9ef';
+      ctx.font = `bold 14px -apple-system, BlinkMacSystemFont, sans-serif`;
+      ctx.fillText((isLock ? '🔒 ' : '') + label, PADDING + 4, y + 22);
+      // Sublabel
+      ctx.fillStyle = '#8a92a3';
+      ctx.font = '12px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.fillText(sublabel, PADDING + 4, y + 40);
+      // Result badge
+      if (result) {
+        const badgeColor = result === 'win' ? '#38bd94' : result === 'loss' ? '#f87171' : '#94a3b8';
+        ctx.fillStyle = badgeColor;
+        ctx.font = 'bold 12px -apple-system, BlinkMacSystemFont, sans-serif';
+        ctx.fillText(result.toUpperCase(), W - PADDING - 40, y + 26);
+      }
+      // Divider
+      ctx.fillStyle = '#1a1e2b';
+      ctx.fillRect(PADDING - 8, y + ROW_H - 6, W - (PADDING - 8) * 2, 1);
+      y += ROW_H;
+    }
+
+    // Lock first
+    if (lockRow) {
+      const g = lockRow;
+      const pickLabel = lockRow.pick?.pick_type === 'total'
+        ? `${lockRow.pick.side === 'over' ? 'Over' : 'Under'} ${lockRow.pick.line_played}`
+        : `${lockRow.pick.side === 'home' ? lockRow.home_team : lockRow.away_team} ${fmtLine(spreadForSide(lockRow.pick.line_played, lockRow.pick.side))}`;
+      const result = lockRow.status === 'final' ? gradePick(lockRow.pick, lockRow) : null;
+      drawRow(pickLabel, lockRow.matchup + ` · ${lockRow.pick.units}u`, result, true, false);
+    }
+
+    // Regular picks
+    for (const r of regularPicks) {
+      const pickLabel = r.pick?.pick_type === 'total'
+        ? `${r.pick.side === 'over' ? 'Over' : 'Under'} ${r.pick.line_played}`
+        : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`;
+      const result = r.status === 'final' ? gradePick(r.pick, r) : null;
+      drawRow(pickLabel, r.matchup + ` · ${r.pick.units}u`, result, false, false);
+    }
+
+    // Divider before custom plays
+    if (customPlays.length > 0 && regularPicks.length > 0) {
+      ctx.fillStyle = '#2a3042';
+      ctx.fillRect(PADDING, y + 8, W - PADDING * 2, 1);
+      ctx.fillStyle = '#5b6272';
+      ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.fillText('CUSTOM PLAYS', PADDING, y + 22);
+      y += 32;
+    }
+
+    // Custom plays
+    for (const cp of customPlays) {
+      const typeLabel = cp.custom_type ? cp.custom_type.charAt(0).toUpperCase() + cp.custom_type.slice(1) : 'Custom';
+      drawRow(cp.custom_label, `${typeLabel} · ${cp.units}u`, cp.result || null, false, true);
+    }
+
+    // Footer
+    ctx.fillStyle = '#2a3042';
+    ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.fillText('bobbymodels.app', PADDING, canvas.height / DPR - 14);
+
+    canvas.toBlob(async (blob) => {
+      const file = new File([blob], `bobby-week${week}-card.png`, { type: 'image/png' });
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: `BobbyModels Week ${week} Card` }); return; }
+        catch (e) { /* fallback to download */ }
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `bobby-week${week}-card.png`; a.click();
+      URL.revokeObjectURL(url);
+    }, 'image/png');
+  }
+
   async function toggleLean(row) {
     if (row.pick?.status === 'official') return;
     if (row.pick?.status === 'lean') {
@@ -977,7 +1103,14 @@ export default function Dashboard() {
       {showMyCard && (
         <div className="panel no-print">
           <div className="panel-head">
-            <h2>My Card — Week {week}</h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <h2 style={{ margin: 0 }}>My Card — Week {week}</h2>
+              {myCardPicksAll.length > 0 && (
+                <button className="toggle-btn" onClick={shareCard} style={{ padding: '5px 12px', fontSize: 12 }}>
+                  📱 Share
+                </button>
+              )}
+            </div>
             <div className="card-filters">
               <select value={cardConfFilter} onChange={(e) => setCardConfFilter(e.target.value)}>
                 <option value="All">All confidence</option>
@@ -1294,6 +1427,69 @@ export default function Dashboard() {
             </table>
           </div>
 
+          {/* Mobile card list — hidden on desktop via CSS, shown on mobile */}
+          <div className="mobile-game-list">
+            {sorted.map((r) => {
+              const confClass = r.confidence_bin ? r.confidence_bin.toLowerCase().replace(' ', '-') : '';
+              const lineFmt = fmtFavoredLine(r.vegas_line, r.home_team, r.away_team);
+              const cp = consensusPick(r);
+              const hasMyPick = r.pick?.status === 'official';
+              return (
+                <div key={r.id} className={`mgame-card ${r.suggested_play ? 'mgame-play' : ''} ${r.pick?.is_lock ? 'mgame-lock' : ''}`}>
+                  <div className="mgame-top">
+                    <div className="mgame-rank">#{rankByGameId[r.id]}</div>
+                    <div className="mgame-matchup">
+                      <div className="mgame-away">{r.away_team}</div>
+                      <div className="mgame-home">@ {r.home_team}</div>
+                    </div>
+                    <span className={`badge ${confClass}`}>{r.confidence_bin ?? '—'}</span>
+                  </div>
+                  <div className="mgame-meta">
+                    <span>{fmtKickoff(r.kickoff_at)}</span>
+                    {r.tv_network && <span style={{ color: '#5b6272' }}>· {r.tv_network}</span>}
+                  </div>
+                  <div className="mgame-metrics">
+                    <div className="mgame-metric"><span className="mgame-metric-label">Vegas</span><span className="mgame-metric-val">{lineFmt}</span></div>
+                    {r.over_under && <div className="mgame-metric"><span className="mgame-metric-label">O/U</span><span className="mgame-metric-val">{r.over_under}</span></div>}
+                    <div className="mgame-metric">
+                      <span className="mgame-metric-label">Edge</span>
+                      <span className={`mgame-metric-val ${r.edge !== null && Math.abs(parseFloat(r.edge)) >= 1.5 ? 'strong' : ''}`}>
+                        {r.edge != null ? fmtLine(parseFloat(r.edge).toFixed(1)) : '—'}
+                      </span>
+                    </div>
+                    <div className="mgame-metric"><span className="mgame-metric-label">Agree%</span><span className="mgame-metric-val">{r.agreement != null ? `${fmt(r.agreement, 0)}%` : '—'}</span></div>
+                    <div className="mgame-metric"><span className="mgame-metric-label">StdDev</span><span className="mgame-metric-val">{fmt(r.stddev, 2)}</span></div>
+                    <div className="mgame-metric"><span className="mgame-metric-label">MSS</span><span className="mgame-metric-val">{fmt(r.mss, 1)}</span></div>
+                  </div>
+                  {r.suggested_play && cp && (
+                    <div className="mgame-play-badge">★ Model: {cp.team} {fmtLine(fmt(cp.num, 1))}</div>
+                  )}
+                  <div className="mgame-actions">
+                    {hasMyPick ? (
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <button className={`chip ${r.pick.is_lock ? 'chip-lock' : ''}`} onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}>
+                          {r.pick.is_lock && '🔒 '}
+                          {r.pick.pick_type === 'total'
+                            ? `${r.pick.side === 'over' ? 'O' : 'U'} ${r.pick.line_played}`
+                            : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`}
+                        </button>
+                        <button className={`lock-toggle-btn ${r.pick.is_lock ? 'active' : ''}`} onClick={() => toggleLock(r)} title="BRLW Lock">🔒</button>
+                        <button className={`note-btn ${r.pick?.note ? 'has-note' : ''}`} onClick={() => setNoteModalGame(r)}>{r.pick?.note ? '📝' : '+'}</button>
+                      </div>
+                    ) : (
+                      <button className="add-btn" onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}>+</button>
+                    )}
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#8a92a3', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={r.pick?.status === 'lean'} disabled={r.pick?.status === 'official'} onChange={() => toggleLean(r)} />
+                      Lean
+                    </label>
+                  </div>
+                </div>
+              );
+            })}
+            {sorted.length === 0 && <div className="empty">No games match the current filters.</div>}
+          </div>
+
           <div className="print-only-cards">
             {printSorted.map((r) => {
               const marketFav = fmtFavoredLine(r.vegas_line, r.home_team, r.away_team);
@@ -1529,6 +1725,50 @@ export default function Dashboard() {
         .brlw-label { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: #fbbf24; white-space: nowrap; }
         .brlw-pick { font-size: 14px; font-weight: 700; color: #fbbf24; }
         .brlw-matchup { font-size: 12px; color: #8a92a3; }
+
+        /* ── Mobile game cards ─────────────────────────────────────── */
+        .mobile-game-list { display: none; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+        .mgame-card { background: #131722; border: 1px solid #1e2535; border-radius: 10px; padding: 14px; }
+        .mgame-play { border-color: rgba(56,189,148,.3); background: rgba(56,189,148,.04); }
+        .mgame-lock { border-color: rgba(251,191,36,.3); background: rgba(251,191,36,.04); }
+        .mgame-top { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+        .mgame-rank { font-size: 11px; font-weight: 800; color: #5b6272; min-width: 24px; margin-top: 2px; }
+        .mgame-matchup { flex: 1; }
+        .mgame-away { font-size: 14px; font-weight: 800; color: #e6e9ef; line-height: 1.2; }
+        .mgame-home { font-size: 12px; color: #8a92a3; line-height: 1.4; }
+        .mgame-meta { font-size: 11px; color: #5b6272; margin-bottom: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+        .mgame-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
+        .mgame-metric { display: flex; flex-direction: column; gap: 2px; }
+        .mgame-metric-label { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: #5b6272; font-weight: 700; }
+        .mgame-metric-val { font-size: 13px; font-weight: 700; color: #e6e9ef; }
+        .mgame-metric-val.strong { color: #38bd94; }
+        .mgame-play-badge { font-size: 12px; font-weight: 700; color: #38bd94; background: rgba(56,189,148,.1); border: 1px solid rgba(56,189,148,.25); border-radius: 6px; padding: 5px 10px; margin-bottom: 10px; }
+        .mgame-actions { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding-top: 10px; border-top: 1px solid #1e2535; }
+
+        /* ── Responsive breakpoints ────────────────────────────────── */
+        @media (max-width: 768px) {
+          .wrap { padding: 12px 12px 60px; }
+          header h1 { font-size: 20px; }
+          .sub { font-size: 12px; margin-bottom: 14px; }
+          .header-actions { gap: 6px; flex-wrap: wrap; }
+          .toggle-btn { padding: 7px 10px; font-size: 12px; }
+          .controls { gap: 10px; padding: 12px; }
+          .control input[type='text'], .control input[type='number'], .control select { width: 90px; font-size: 13px; }
+          .control input[type='text'] { width: 130px; }
+          .panel { padding: 12px 14px; }
+          .stats-row { gap: 16px; }
+          .stat-num { font-size: 18px; }
+          /* Hide desktop table, show mobile cards */
+          .table-wrap { display: none; }
+          .mobile-game-list { display: flex; }
+        }
+        @media (max-width: 480px) {
+          .header-top { gap: 10px; }
+          header h1 { font-size: 17px; }
+          .toggle-btn { padding: 6px 8px; font-size: 11px; }
+          .mgame-metrics { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+          .mgame-metric-val { font-size: 12px; }
+        }
       `}</style>
     </div>
   );
