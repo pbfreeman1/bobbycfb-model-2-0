@@ -43,7 +43,7 @@ const TOOLTIPS = {
   vegas_line: 'The favored team and current market spread.',
   line_move: 'How many points the market has moved since the line opened. Positive = moved toward the home team; negative = moved toward the away team.',
   over_under: 'The market total (combined predicted points for both teams) from sportsbook lines.',
-  consensus_spread: "BobbyCFB's weighted-average predicted spread, shown as the team and price the model itself would favor — same side as the Edge, converted to standard sportsbook notation (favorite negative, underdog positive).",
+  consensus_spread: "BobbyCFB’s weighted-average predicted spread, shown as the team and price the model itself would favor — same side as the Edge, converted to standard sportsbook notation (favorite negative, underdog positive).",
   edge: 'Consensus spread minus the Vegas line. The size of the disagreement between the model consensus and the market — the core signal this system is built around.',
   agreement: 'The fraction of the Top-K model pool (the ~7 models actually used for the consensus) whose prediction falls on the same side of the market line as the edge, with the team that direction favors and the raw count.',
   agreement_all_pct: 'The same agreement calculation, but across every model that submitted a prediction this week (not just the Top-K pool used for consensus). Useful as a sanity check — if Top-K and All disagree sharply, the Top-K pool may be an outlier relative to the wider field.',
@@ -55,7 +55,7 @@ const TOOLTIPS = {
   valid_model_count: 'How many of the ~30+ source systems submitted a usable prediction for this game.',
   tv_network: 'Broadcast network airing the game, where available.',
   lean: 'A quick, informal flag for games you’re leaning toward but haven’t committed to. Not counted in your official season record.',
-  play: 'Your official play for this game — the side, bet type, and unit size you're actually tracking for season results.',
+  play: 'Your official play for this game — the side, bet type, and unit size you’re actually tracking for season results.',
   notes: 'Your private notes on this game — injuries, weather, anything worth remembering.',
 };
 
