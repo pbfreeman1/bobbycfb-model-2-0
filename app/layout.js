@@ -6,6 +6,7 @@ const NAV = [
   { href: '/', label: '📊 Dashboard' },
   { href: '/my-card', label: '🎯 My Card' },
   { href: '/weekly-board', label: '📋 Weekly Board' },
+  { href: '/bobby-results', label: '🏈 Bobby Results' },
   { href: '/research', label: '🔍 Research' },
   { href: '/models', label: '🤖 Models' },
   { href: '/results', label: '📅 Results' },

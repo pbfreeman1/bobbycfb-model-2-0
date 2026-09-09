@@ -113,27 +113,34 @@ export async function POST(req) {
         }
       }
 
-      // 4. Grade game_metrics suggested plays for THIS game (using our own
-      //    internal game id, not CFBD's g.id).
+      // 4. Grade the BobbyModels consensus pick for EVERY game this week, not
+      //    just the ones that passed the qualification filter. suggested_play
+      //    stays the "would I actually bet this" flag, but every game now gets
+      //    an ATS grade so the Bobby Model Results page can show full-slate
+      //    performance and check whether confidence bins / edge size are
+      //    actually calibrated, not just the qualified subset.
       const { data: metrics } = await supabase
         .from('game_metrics')
-        .select('id, suggested_side, suggested_line, consensus_spread, vegas_line')
-        .eq('game_id', dbGame.id)
-        .eq('suggested_play', true);
+        .select('id, edge, consensus_spread, vegas_line, suggested_play, mss, confidence_bin')
+        .eq('game_id', dbGame.id);
 
       for (const m of metrics || []) {
-        const lineAdj = m.suggested_side === 'home'
-          ? margin + (m.suggested_line || 0)
-          : -margin + Math.abs(m.suggested_line || 0);
+        if (m.vegas_line == null || m.edge == null) continue;
+        const vegasLine = parseFloat(m.vegas_line);
+        const edge = parseFloat(m.edge);
+        const pickSide = edge > 0 ? 'home' : 'away'; // whichever side the consensus liked
 
-        const atsResult = lineAdj > 0 ? 'win' : lineAdj < 0 ? 'loss' : 'push';
-        const clv = (m.vegas_line || 0) - (g.lines?.[0]?.spread || m.vegas_line || 0);
+        const atsResult = pickSide === 'home'
+          ? (margin > vegasLine ? 'win' : margin < vegasLine ? 'loss' : 'push')
+          : (margin < vegasLine ? 'win' : margin > vegasLine ? 'loss' : 'push');
+        const atsMargin = pickSide === 'home' ? margin - vegasLine : vegasLine - margin;
+        const clv = vegasLine - (g.lines?.[0]?.spread ?? vegasLine);
         const consensusErr = (m.consensus_spread || 0) - margin;
 
         await supabase.from('pick_grades').upsert({
           game_metrics_id: m.id,
           ats_result: atsResult,
-          ats_margin: parseFloat(lineAdj.toFixed(2)),
+          ats_margin: parseFloat(atsMargin.toFixed(2)),
           consensus_error: parseFloat(consensusErr.toFixed(2)),
           clv: parseFloat(clv.toFixed(2)),
           graded_at: new Date().toISOString(),

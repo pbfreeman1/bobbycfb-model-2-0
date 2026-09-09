@@ -50,7 +50,7 @@ export default function Ingest() {
       const data = await res.json();
       if (data.error) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
       else {
-        addLog(`Matched ${data.games_matched}/${data.cfbd_games} games, marked ${data.games_marked_final} final, graded ${data.model_picks_graded} individual model picks, ${data.picks_graded} user picks, and ${data.metrics_graded} suggested plays.`, 'ok');
+        addLog(`Matched ${data.games_matched}/${data.cfbd_games} games, marked ${data.games_marked_final} final, graded ${data.model_picks_graded} individual model picks, ${data.picks_graded} user picks, and ${data.metrics_graded} BobbyModels consensus picks (full slate).`, 'ok');
         if (data.unmatched?.length) addLog(`Unmatched: ${data.unmatched.map(u => `${u.cfbd_home} vs ${u.cfbd_away}`).join(', ')}`, 'error');
         setStatus('ok');
       }
