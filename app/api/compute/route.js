@@ -39,10 +39,26 @@ export async function POST(req) {
 
   try {
     // 1. Get ranked models for this season (use prior seasons)
+    // Use the most recent recalibration at or before this week (week 1 falls back
+    // to the pre-season 2021-2025 backtest baseline; later weeks pick up whatever
+    // /api/recalibrate has written since). Without this, every as_of_week snapshot
+    // for the season would be selected together and rank/topK would be meaningless.
+    const { data: weeks, error: wkErr } = await supabase
+      .from('model_grades')
+      .select('as_of_week')
+      .eq('as_of_season', season)
+      .lte('as_of_week', week)
+      .order('as_of_week', { ascending: false })
+      .limit(1);
+    if (wkErr) throw new Error(`weeks: ${wkErr.message}`);
+    if (!weeks.length) throw new Error(`No model_grades snapshot found for season ${season} at or before week ${week}`);
+    const snapshotWeek = weeks[0].as_of_week;
+
     const { data: grades, error: grErr } = await supabase
       .from('model_grades')
       .select('model_id, rank, shrunk_ats_pct')
       .eq('as_of_season', season)
+      .eq('as_of_week', snapshotWeek)
       .order('rank', { ascending: true });
     if (grErr) throw new Error(`grades: ${grErr.message}`);
 
@@ -158,7 +174,7 @@ export async function POST(req) {
       if (!uErr) { metricsInserted++; if (qualifies) plays++; }
     }
 
-    return Response.json({ games: metricsInserted, plays });
+    return Response.json({ games: metricsInserted, plays, snapshot_week: snapshotWeek });
   } catch (e) {
     return Response.json({ error: e.message }, { status: 500 });
   }

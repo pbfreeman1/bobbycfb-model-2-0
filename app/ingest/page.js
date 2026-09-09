@@ -35,7 +35,7 @@ export default function Ingest() {
       const data = await res.json();
       if (data.error) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
       else {
-        addLog(`Computed metrics for ${data.games || 0} games. Plays: ${data.plays || 0}`, 'ok');
+        addLog(`Computed metrics for ${data.games || 0} games using Week ${data.snapshot_week} model rankings. Plays: ${data.plays || 0}`, 'ok');
         setStatus('ok');
       }
     } catch (e) { addLog(`Network error: ${e.message}`, 'error'); setStatus('error'); }
@@ -52,6 +52,22 @@ export default function Ingest() {
       else {
         addLog(`Matched ${data.games_matched}/${data.cfbd_games} games, marked ${data.games_marked_final} final, graded ${data.picks_graded} picks and ${data.metrics_graded} model plays.`, 'ok');
         if (data.unmatched?.length) addLog(`Unmatched: ${data.unmatched.map(u => `${u.cfbd_home} vs ${u.cfbd_away}`).join(', ')}`, 'error');
+        setStatus('ok');
+      }
+    } catch (e) { addLog(`Network error: ${e.message}`, 'error'); setStatus('error'); }
+    finally { setLoading(false); }
+  }
+
+  async function runRecalibrate() {
+    setLoading(true); setStatus(null);
+    addLog(`Recalibrating model rankings using ${season} through Week ${week}…`);
+    try {
+      const res = await fetch(`/api/recalibrate?season=${season}&week=${week}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.error) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
+      else {
+        addLog(`Updated ${data.models_updated} models from ${data.games_used} games (${data.predictions_graded} predictions graded). New rankings apply starting Week ${data.snapshot_for_week}.`, 'ok');
+        addLog(`Top 7: ${data.top7.map(t => `${t.system_name} (${(t.shrunk_ats_pct * 100).toFixed(1)}%, n=${t.season_games})`).join(', ')}`, 'ok');
         setStatus('ok');
       }
     } catch (e) { addLog(`Network error: ${e.message}`, 'error'); setStatus('error'); }
@@ -98,6 +114,14 @@ export default function Ingest() {
             onClick={gradeResults}
             loading={loading}
           />
+          <IngestStep
+            number={4}
+            title="Recalibrate Models"
+            desc="Grade every individual system against the completed weeks, blend 80% current-season / 20% 2021-2025 history, and write next week's Top-7 pool."
+            action="Recalibrate Models"
+            onClick={runRecalibrate}
+            loading={loading}
+          />
         </div>
       </div>
 
@@ -125,7 +149,7 @@ export default function Ingest() {
           <li>Paste the insert SQL into Supabase SQL Editor (raw_predictions batch insert)</li>
           <li>Run CFBD Sync above to populate kickoff times, TV, and O/U</li>
           <li>Run Compute Engine to generate game_metrics and suggested plays</li>
-          <li>After games are played, run Grade Results to update pick outcomes</li>
+          <li>After games are played, set Week to that completed week, run Grade Results, then run Recalibrate Models &mdash; this updates the Top-7 pool used starting the following week</li>
         </ol>
       </div>
     </div>
