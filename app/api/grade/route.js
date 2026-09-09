@@ -31,7 +31,7 @@ export async function POST(req) {
     //    the same normalization on both sides and report exactly what failed.
     const { data: dbGames, error: dbGamesErr } = await supabase
       .from('games')
-      .select('id, home_team, away_team')
+      .select('id, home_team, away_team, current_line')
       .eq('season', season)
       .eq('week', week);
     if (dbGamesErr) return Response.json({ error: dbGamesErr.message }, { status: 500 });
@@ -45,7 +45,9 @@ export async function POST(req) {
     let gamesMarkedFinal = 0;
     let metricsGraded = 0;
     let picksGraded = 0;
+    let modelPicksGraded = 0;
     const unmatched = [];
+    const modelGradeRows = []; // batched and upserted once at the end
 
     for (const g of cfbdGames) {
       const key = matchKey(g.homeTeam, g.awayTeam);
@@ -75,7 +77,43 @@ export async function POST(req) {
         .eq('id', dbGame.id);
       if (!updErr) gamesMarkedFinal++;
 
-      // 3. Grade game_metrics suggested plays for THIS game (using our own
+      // 3. Grade EVERY model's raw prediction for this game, not just the
+      //    suggested plays - this is what powers the weekly results page and
+      //    lets the whole model pool be analyzed, not just qualified plays.
+      //    Graded against the same current_line the compute engine used.
+      if (dbGame.current_line != null) {
+        const vegasLine = parseFloat(dbGame.current_line);
+        const { data: gamePreds } = await supabase
+          .from('raw_predictions')
+          .select('model_id, predicted_margin')
+          .eq('game_id', dbGame.id);
+
+        for (const p of gamePreds || []) {
+          if (p.predicted_margin == null) continue;
+          const predicted = parseFloat(p.predicted_margin);
+          let atsResult;
+          if (predicted > vegasLine) atsResult = margin > vegasLine ? 'win' : margin < vegasLine ? 'loss' : 'push';
+          else if (predicted < vegasLine) atsResult = margin < vegasLine ? 'win' : margin > vegasLine ? 'loss' : 'push';
+          else atsResult = 'push';
+          const signedErr = predicted - margin;
+
+          modelGradeRows.push({
+            model_id: p.model_id,
+            game_id: dbGame.id,
+            season,
+            week,
+            predicted_margin: predicted,
+            vegas_line: vegasLine,
+            actual_margin: margin,
+            ats_result: atsResult,
+            abs_error: parseFloat(Math.abs(signedErr).toFixed(2)),
+            signed_error: parseFloat(signedErr.toFixed(2)),
+            graded_at: new Date().toISOString(),
+          });
+        }
+      }
+
+      // 4. Grade game_metrics suggested plays for THIS game (using our own
       //    internal game id, not CFBD's g.id).
       const { data: metrics } = await supabase
         .from('game_metrics')
@@ -104,7 +142,7 @@ export async function POST(req) {
         metricsGraded++;
       }
 
-      // 4. Grade user_picks for this game
+      // 5. Grade user_picks for this game
       const { data: picks } = await supabase.from('user_picks').select('*').eq('game_id', dbGame.id);
       for (const p of picks || []) {
         if (!p.played || p.is_custom) continue;
@@ -122,10 +160,20 @@ export async function POST(req) {
       }
     }
 
+    // Batch upsert all individual model grades, chunked to stay well under
+    // PostgREST payload limits (a full week can be ~2,000+ rows: 43 games x ~50 models).
+    const CHUNK = 500;
+    for (let i = 0; i < modelGradeRows.length; i += CHUNK) {
+      const chunk = modelGradeRows.slice(i, i + CHUNK);
+      const { error: mgErr } = await supabase.from('model_pick_grades').upsert(chunk, { onConflict: 'model_id,game_id' });
+      if (!mgErr) modelPicksGraded += chunk.length;
+    }
+
     return Response.json({
       cfbd_games: cfbdGames.length,
       games_matched: gamesMatched,
       games_marked_final: gamesMarkedFinal,
+      model_picks_graded: modelPicksGraded,
       metrics_graded: metricsGraded,
       picks_graded: picksGraded,
       unmatched, // any completed CFBD game we couldn't match to our games table

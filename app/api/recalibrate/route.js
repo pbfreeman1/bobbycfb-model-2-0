@@ -53,47 +53,30 @@ export async function POST(req) {
     }
     const baseById = new Map(baseline.map((b) => [b.model_id, b]));
 
-    // 2. Every completed 2026 game through the given week, with a market line to grade against.
-    const games = await fetchAllRows(supabase, 'games', (q) =>
-      q.select('id, home_score, away_score, current_line')
-        .eq('season', season).lte('week', throughWeek).eq('status', 'final').not('current_line', 'is', null)
+    // 2. Every individual model pick already graded this season through the given
+    //    week - populated by /api/grade, which grades ALL raw_predictions (not just
+    //    suggested plays) each time games are marked final. Single source of truth
+    //    shared with the weekly results page, so rankings and displayed history
+    //    can never drift apart.
+    const grades = await fetchAllRows(supabase, 'model_pick_grades', (q) =>
+      q.select('model_id, ats_result, abs_error, signed_error')
+        .eq('season', season).lte('week', throughWeek)
     );
-    if (!games.length) {
-      return Response.json({ error: `No final games with a line found for season ${season} through week ${throughWeek}.` }, { status: 400 });
+    if (!grades.length) {
+      return Response.json({ error: `No graded picks found in model_pick_grades for season ${season} through week ${throughWeek}. Run Grade Results first.` }, { status: 400 });
     }
-    const gameIds = games.map((g) => g.id);
-    const gameById = new Map(games.map((g) => [g.id, g]));
 
-    // 3. Every model's prediction for those games.
-    const preds = await fetchAllRows(supabase, 'raw_predictions', (q) =>
-      q.select('game_id, model_id, predicted_margin').in('game_id', gameIds)
-    );
-
-    // 4. Grade each prediction against the game's line (same sign convention used
-    //    everywhere else: positive = home favored; margin = home_score - away_score).
+    // 3. Aggregate per model.
     const seasonStats = new Map(); // model_id -> { wins, losses, pushes, sumAbsErr, sumErr, count }
-    for (const p of preds) {
-      const g = gameById.get(p.game_id);
-      if (!g || g.home_score == null || g.away_score == null || p.predicted_margin == null) continue;
-      const vegasLine = parseFloat(g.current_line);
-      const margin = g.home_score - g.away_score;
-      const predicted = parseFloat(p.predicted_margin);
-
-      let atsResult;
-      if (predicted > vegasLine) atsResult = margin > vegasLine ? 'win' : margin < vegasLine ? 'loss' : 'push'; // model liked home
-      else if (predicted < vegasLine) atsResult = margin < vegasLine ? 'win' : margin > vegasLine ? 'loss' : 'push'; // model liked away
-      else atsResult = 'push'; // model landed exactly on the line - no pick
-
-      const err = predicted - margin;
-
-      const s = seasonStats.get(p.model_id) || { wins: 0, losses: 0, pushes: 0, sumAbsErr: 0, sumErr: 0, count: 0 };
-      if (atsResult === 'win') s.wins++;
-      else if (atsResult === 'loss') s.losses++;
+    for (const gr of grades) {
+      const s = seasonStats.get(gr.model_id) || { wins: 0, losses: 0, pushes: 0, sumAbsErr: 0, sumErr: 0, count: 0 };
+      if (gr.ats_result === 'win') s.wins++;
+      else if (gr.ats_result === 'loss') s.losses++;
       else s.pushes++;
-      s.sumAbsErr += Math.abs(err);
-      s.sumErr += err;
+      s.sumAbsErr += gr.abs_error != null ? parseFloat(gr.abs_error) : 0;
+      s.sumErr += gr.signed_error != null ? parseFloat(gr.signed_error) : 0;
       s.count++;
-      seasonStats.set(p.model_id, s);
+      seasonStats.set(gr.model_id, s);
     }
 
     // 5. Blend each model's season-to-date stats with its 2021-2025 baseline, then
@@ -178,8 +161,7 @@ export async function POST(req) {
       season,
       snapshot_for_week: nextWeek,
       models_updated: rows.length,
-      games_used: games.length,
-      predictions_graded: preds.length,
+      picks_graded_used: grades.length,
       top7,
     });
   } catch (e) {

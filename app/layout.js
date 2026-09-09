@@ -8,6 +8,7 @@ const NAV = [
   { href: '/weekly-board', label: '📋 Weekly Board' },
   { href: '/research', label: '🔍 Research' },
   { href: '/models', label: '🤖 Models' },
+  { href: '/results', label: '📅 Results' },
   { href: '/calibration', label: '📈 Calibration' },
   { href: '/ingest', label: '⚙️ Ingest' },
 ];

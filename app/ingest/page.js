@@ -50,7 +50,7 @@ export default function Ingest() {
       const data = await res.json();
       if (data.error) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
       else {
-        addLog(`Matched ${data.games_matched}/${data.cfbd_games} games, marked ${data.games_marked_final} final, graded ${data.picks_graded} picks and ${data.metrics_graded} model plays.`, 'ok');
+        addLog(`Matched ${data.games_matched}/${data.cfbd_games} games, marked ${data.games_marked_final} final, graded ${data.model_picks_graded} individual model picks, ${data.picks_graded} user picks, and ${data.metrics_graded} suggested plays.`, 'ok');
         if (data.unmatched?.length) addLog(`Unmatched: ${data.unmatched.map(u => `${u.cfbd_home} vs ${u.cfbd_away}`).join(', ')}`, 'error');
         setStatus('ok');
       }
@@ -66,7 +66,7 @@ export default function Ingest() {
       const data = await res.json();
       if (data.error) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
       else {
-        addLog(`Updated ${data.models_updated} models from ${data.games_used} games (${data.predictions_graded} predictions graded). New rankings apply starting Week ${data.snapshot_for_week}.`, 'ok');
+        addLog(`Updated ${data.models_updated} models using ${data.picks_graded_used} graded picks. New rankings apply starting Week ${data.snapshot_for_week}.`, 'ok');
         addLog(`Top 7: ${data.top7.map(t => `${t.system_name} (${(t.shrunk_ats_pct * 100).toFixed(1)}%, n=${t.season_games})`).join(', ')}`, 'ok');
         setStatus('ok');
       }
