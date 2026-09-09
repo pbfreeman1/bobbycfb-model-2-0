@@ -49,7 +49,11 @@ export default function Ingest() {
       const res = await fetch(`/api/grade?season=${season}&week=${week}`, { method: 'POST' });
       const data = await res.json();
       if (data.error) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
-      else { addLog(`Graded ${data.graded || 0} games.`, 'ok'); setStatus('ok'); }
+      else {
+        addLog(`Matched ${data.games_matched}/${data.cfbd_games} games, marked ${data.games_marked_final} final, graded ${data.picks_graded} picks and ${data.metrics_graded} model plays.`, 'ok');
+        if (data.unmatched?.length) addLog(`Unmatched: ${data.unmatched.map(u => `${u.cfbd_home} vs ${u.cfbd_away}`).join(', ')}`, 'error');
+        setStatus('ok');
+      }
     } catch (e) { addLog(`Network error: ${e.message}`, 'error'); setStatus('error'); }
     finally { setLoading(false); }
   }
