@@ -93,7 +93,7 @@ export async function POST(req) {
       predsByGame[p.game_id].push(p);
     }
 
-    let metricsInserted = 0, plays = 0;
+    let metricsInserted = 0, plays = 0, firstError = null;
 
     for (const game of games) {
       const gamePreds = predsByGame[game.id] || [];
@@ -169,12 +169,13 @@ export async function POST(req) {
         suggested_play: qualifies,
         suggested_side: qualifies ? suggestedSide : null,
         suggested_line: qualifies ? parseFloat(suggestedLine.toFixed(1)) : null,
-      }, { onConflict: 'game_id' });
+      }, { onConflict: 'game_id,snapshot_type' });
 
       if (!uErr) { metricsInserted++; if (qualifies) plays++; }
+      else if (!firstError) { firstError = uErr.message; }
     }
 
-    return Response.json({ games: metricsInserted, plays, snapshot_week: snapshotWeek });
+    return Response.json({ games: metricsInserted, plays, snapshot_week: snapshotWeek, ...(firstError ? { warning: `Some rows failed to upsert, e.g.: ${firstError}` } : {}) });
   } catch (e) {
     return Response.json({ error: e.message }, { status: 500 });
   }

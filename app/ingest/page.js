@@ -36,6 +36,7 @@ export default function Ingest() {
       if (data.error) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
       else {
         addLog(`Computed metrics for ${data.games || 0} games using Week ${data.snapshot_week} model rankings. Plays: ${data.plays || 0}`, 'ok');
+        if (data.warning) addLog(data.warning, 'error');
         setStatus('ok');
       }
     } catch (e) { addLog(`Network error: ${e.message}`, 'error'); setStatus('error'); }
