@@ -33,11 +33,11 @@ export default function MyCard() {
     setLoading(true); setError(null);
     try {
       const [pData, gData, lockData, pssPData, pssGData, pssLockData] = await Promise.all([
-        sbFetch(`user_picks?select=*,games(home_team,away_team,kickoff_at,current_line,over_under,game_metrics(consensus_spread,edge,mss,confidence_bin,suggested_side,suggested_line))&season=eq.${season}&week=eq.${week}&order=created_at.asc`),
+        sbFetch(`user_picks?select=*,games(home_team,away_team,kickoff_at,tv_network,current_line,over_under,game_metrics(consensus_spread,edge,mss,confidence_bin,suggested_side,suggested_line))&season=eq.${season}&week=eq.${week}&order=created_at.asc`),
         sbFetch(`games?select=id,home_team,away_team,kickoff_at,current_line,game_metrics(suggested_side,suggested_line,consensus_spread,edge,mss)&season=eq.${season}&week=eq.${week}&order=home_team.asc`),
         sbFetch(`user_picks?select=*,games(home_team,away_team)&is_lock=eq.true&order=created_at.desc&limit=20`),
         // BobbyPSSModel — separate table, merged into the same consolidated card below.
-        sbFetch(`pss_user_picks?select=*,games(home_team,away_team,kickoff_at,current_line,over_under)&season=eq.${season}&week=eq.${week}&order=created_at.asc`),
+        sbFetch(`pss_user_picks?select=*,games(home_team,away_team,kickoff_at,tv_network,current_line,over_under)&season=eq.${season}&week=eq.${week}&order=created_at.asc`),
         sbFetch(`games?select=id,home_team,away_team,kickoff_at,current_line,pss_game_metrics(suggested_side,consensus_spread,edge,pss,pss_bin,qualifies)&season=eq.${season}&week=eq.${week}&order=home_team.asc`),
         sbFetch(`pss_user_picks?select=*,games(home_team,away_team)&is_lock=eq.true&order=created_at.desc&limit=20`),
       ]);
@@ -508,7 +508,13 @@ function PickCard({ pick, onRemove, onToggleLock, onResultChange, saving }) {
           </>
           : <>
             <span style={{ fontWeight: 700, fontSize: 14 }}>{teamName} {fmtLine(pick.line_played)}</span>
-            {g && <span style={{ marginLeft: 8, fontSize: 12, color: '#8a92a3' }}>{g.away_team} @ {g.home_team}</span>}
+            {g && (
+              <span style={{ marginLeft: 8, fontSize: 12, color: '#8a92a3' }}>
+                {g.away_team} @ {g.home_team}
+                {g.kickoff_at && ` · ${fmtKickoff(g.kickoff_at)}`}
+                {g.tv_network && ` · ${g.tv_network}`}
+              </span>
+            )}
             <ModelBadge model={pick._model} />
           </>
         }

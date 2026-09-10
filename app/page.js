@@ -582,16 +582,25 @@ function MyCardModal({ rows, picksByGame, pssPicksByGame, onClose }) {
         const home = r.game.home_team, away = r.game.away_team;
         return (
           <div key={r.game.id} style={{ padding: '10px 0', borderBottom: `1px solid ${C.border}` }}>
-            <div style={{ ...FH, fontSize: 13, color: C.text, marginBottom: 6 }}>{away} @ {home}</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+              <div style={{ ...FH, fontSize: 13, color: C.text }}>{away} @ {home}</div>
+              <span style={{ ...FM, fontSize: 11, color: C.sub }}>{fmtKickoff(r.game.kickoff_at)}</span>
+              {r.game.tv_network && <span style={{ ...FM, fontSize: 11, color: C.sub }}>{r.game.tv_network}</span>}
+            </div>
             {lean && <div style={{ ...FM, fontSize: 12, color: C.pss, marginBottom: 3 }}>Lean: {lean.side === 'home' ? home : away}</div>}
             {plays.map((pk) => (
-              <div key={pk.id} style={{ ...FM, fontSize: 12, color: C.sub, display: 'flex', gap: 10, alignItems: 'center', padding: '2px 0' }}>
+              <div key={pk.id} style={{
+                ...FM, fontSize: 12, color: C.sub, display: 'flex', gap: 10, alignItems: 'center', padding: '2px 6px',
+                ...(pk.is_lock ? { background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.35)', borderRadius: 4 } : {}),
+              }}>
+                {pk.is_lock && <span style={{ fontSize: 11 }}>🔒</span>}
                 <span style={{ color: C.agree }}>{(parseFloat(pk.units) || 1).toFixed(pk.units % 1 === 0 ? 0 : 1)}u</span>
-                <span style={{ color: C.text }}>{playLabel(pk, home, away)}</span>
+                <span style={{ color: pk.is_lock ? '#fbbf24' : C.text, fontWeight: pk.is_lock ? 700 : 400 }}>{playLabel(pk, home, away)}</span>
                 {pk._models.map((mdl) => (
                   <span key={mdl} style={{ fontSize: 9.5, color: MODEL_COLOR[mdl], border: `1px solid ${MODEL_COLOR[mdl]}`, borderRadius: 3, padding: '1px 5px' }}>{mdl}</span>
                 ))}
                 {pk.status && pk.status !== 'official' && <span style={{ fontSize: 9.5, color: C.dim }}>{pk.status}</span>}
+                {pk.is_lock && <span style={{ fontSize: 9.5, color: '#fbbf24', fontWeight: 700 }}>BRLW</span>}
               </div>
             ))}
           </div>
