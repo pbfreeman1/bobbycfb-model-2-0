@@ -41,11 +41,21 @@ export default function Results() {
       const picks = await sbFetch(`user_picks?select=result,played,is_custom&game_id=in.${idList}`);
       setUserPicks(tally(picks.filter((p) => p.played && !p.is_custom).map((p) => p.result)));
 
-      // Every individual model's graded picks for the games in scope
-      const grades = await sbFetch(
-        `model_pick_grades?select=model_id,ats_result,abs_error,signed_error,source_models(system_name,status)&season=eq.${season}&${weekFilter}`
-      );
-      setModelRows(aggregateByModel(grades));
+      // Every individual model's graded picks for the games in scope.
+      // Paginate in chunks of 1000 — PostgREST silently caps unpaginated
+      // selects at 1000 rows, so a week with 35+ models × 43 games = 1,500+
+      // rows gets truncated, showing only ~29 games per model instead of 43.
+      const PAGE = 1000;
+      let allGrades = [], from = 0;
+      while (true) {
+        const chunk = await sbFetch(
+          `model_pick_grades?select=model_id,ats_result,abs_error,signed_error,source_models(system_name,status)&season=eq.${season}&${weekFilter}&offset=${from}&limit=${PAGE}`
+        );
+        allGrades = allGrades.concat(chunk);
+        if (chunk.length < PAGE) break;
+        from += PAGE;
+      }
+      setModelRows(aggregateByModel(allGrades));
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   };

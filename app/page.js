@@ -165,6 +165,74 @@ function ModalTabs({ tab, setTab, tabs }) {
 }
 
 // ---------------------------------------------------------------------------
+// Per-model prediction breakdown — shared by both PSS Detail and MSS Detail
+// tabs. Shows each top-K model's raw predicted margin and which side it
+// implies, so you can see exactly which systems are driving the consensus.
+// ---------------------------------------------------------------------------
+function ModelBreakdownTable({ row }) {
+  const { game, gm, pm } = row;
+  const home = game.home_team, away = game.away_team;
+  const vegasLine = parseFloat(gm?.vegas_line ?? pm?.vegas_line ?? 0);
+
+  // Collect model predictions from raw_predictions via the already-loaded row.
+  // The dashboard loads raw_predictions for each game into row.preds (an array
+  // of { model_id, system_name, predicted_margin }). If that field is missing
+  // (older data shape), we show a graceful empty state.
+  const preds = row.preds || [];
+  const topkIds = new Set(gm?.topk_model_ids || pm?.topk_model_ids || []);
+
+  // If we have topk_model_ids, show only those; otherwise show all preds we have.
+  const display = topkIds.size > 0
+    ? preds.filter((p) => topkIds.has(p.model_id))
+    : preds;
+
+  // Sort by model rank if available, otherwise by predicted_margin desc
+  display.sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
+
+  if (display.length === 0) {
+    return (
+      <div>
+        <div style={{ ...FH, fontSize: 11, color: C.sub, marginBottom: 6 }}>MODEL BREAKDOWN (TOP-K)</div>
+        <div style={{ ...FM, fontSize: 11, color: C.dim }}>No per-model prediction data loaded for this game.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ ...FH, fontSize: 11, color: C.sub, marginBottom: 8 }}>MODEL BREAKDOWN (TOP-{display.length})</div>
+      <div style={{ border: `1px solid ${C.border}`, borderRadius: 4, overflow: 'hidden' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px 90px 80px', ...FM, fontSize: 10, color: C.sub, padding: '6px 10px', background: C.surface2, letterSpacing: 0.3 }}>
+          <span>SYSTEM</span><span>PREDICTED</span><span>EDGE</span><span>SIDE</span>
+        </div>
+        {display.map((p, i) => {
+          const pred = parseFloat(p.predicted_margin);
+          const edge = pred - vegasLine;
+          const side = edge >= 0 ? 'home' : 'away';
+          const sideTeam = side === 'home' ? home : away;
+          const sideColor = side === 'home' ? C.agree : C.pss;
+          return (
+            <div key={p.model_id} style={{
+              display: 'grid', gridTemplateColumns: '1fr 90px 90px 80px',
+              ...FM, fontSize: 11.5, padding: '7px 10px',
+              background: i % 2 === 0 ? 'transparent' : C.surface2,
+              borderTop: `1px solid ${C.border}`,
+            }}>
+              <span style={{ color: C.text }}>{p.system_name || p.model_id}</span>
+              <span style={{ color: C.sub }}>{pred > 0 ? `+${pred.toFixed(1)}` : pred.toFixed(1)}</span>
+              <span style={{ color: Math.abs(edge) >= 1.5 ? C.agree : C.sub }}>
+                {edge > 0 ? `+${edge.toFixed(1)}` : edge.toFixed(1)}
+              </span>
+              <span style={{ color: sideColor }}>{sideTeam.split(' ').slice(-1)[0]}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Drilldown modal — every field the card trims out, for one game
 // ---------------------------------------------------------------------------
 function DrilldownModal({ row, range, agreementAll, onClose }) {
@@ -197,9 +265,10 @@ function DrilldownModal({ row, range, agreementAll, onClose }) {
               {pm.pss_drivers?.length ? pm.pss_drivers.map((d, i) => <span key={i} style={{ ...FM, fontSize: 11, padding: '3px 8px', borderRadius: 3, background: `${C.agree}1F`, color: C.agree }}>+ {d}</span>) : <span style={{ ...FM, fontSize: 11, color: C.dim }}>None</span>}
             </div>
             <div style={{ ...FH, fontSize: 11, color: C.sub, marginBottom: 6 }}>WARNINGS</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 16 }}>
               {pm.warnings?.length ? pm.warnings.map((w, i) => <span key={i} style={{ ...FM, fontSize: 11, padding: '3px 8px', borderRadius: 3, background: `${C.warn}1F`, color: C.warn }}>! {w}</span>) : <span style={{ ...FM, fontSize: 11, color: C.dim }}>None</span>}
             </div>
+            <ModelBreakdownTable row={row} />
           </div>
         ) : <div style={{ ...FM, fontSize: 12, color: C.dim }}>No PSS data for this game.</div>
       ) : (
@@ -216,6 +285,7 @@ function DrilldownModal({ row, range, agreementAll, onClose }) {
             <Stat label="# MODELS" value={gm.valid_model_count ?? '—'} />
             <Stat label="MODEL PLAY?" value={gm.suggested_play ? 'Yes' : 'No'} color={gm.suggested_play ? C.agree : C.dim} />
           </div>
+          <div style={{ marginTop: 16 }}><ModelBreakdownTable row={row} /></div>
         ) : <div style={{ ...FM, fontSize: 12, color: C.dim }}>No MSS data for this game.</div>
       )}
     </Modal>
@@ -653,7 +723,11 @@ export default function Dashboard() {
 
   useEffect(() => {
     let cancelled = false;
-    getCurrentWeek(season).then((w) => { if (!cancelled) setWeek(w); });
+    // Dashboard defaults to the latest week that has any games scheduled
+    // (not just final games), so Week 2 shows up as soon as games are seeded.
+    sbFetch(`games?select=week&season=eq.${season}&order=week.desc&limit=1`)
+      .then((rows) => { if (!cancelled) setWeek(rows.length ? rows[0].week : 1); })
+      .catch(() => { if (!cancelled) setWeek(1); });
     return () => { cancelled = true; };
   }, [season]);
 
