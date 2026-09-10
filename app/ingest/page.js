@@ -21,6 +21,23 @@ export default function Ingest() {
       if (data.error) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
       else {
         addLog(`Synced ${data.games || 0} games, ${data.updated || 0} updated with kickoff/TV/O/U`, 'ok');
+        if (data.unmatched?.length) addLog(`Unmatched (need a team-match.js alias): ${data.unmatched.map(u => `${u.cfbd_home} vs ${u.cfbd_away}`).join(', ')}`, 'error');
+        setStatus('ok');
+      }
+    } catch (e) { addLog(`Network error: ${e.message}`, 'error'); setStatus('error'); }
+    finally { setLoading(false); }
+  }
+
+  async function runTeamLogoSync() {
+    setLoading(true); setStatus(null);
+    addLog(`Syncing team logos for ${season} from CFBD…`);
+    try {
+      const res = await fetch(`/api/team-logos-sync?season=${season}`);
+      const data = await res.json();
+      if (data.error) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
+      else {
+        addLog(`Checked ${data.checked} teams (${data.already_had_logo} already had logos), added ${data.added} new logo(s).`, 'ok');
+        if (data.unmatched?.length) addLog(`No CFBD match found (may need a team-match.js alias): ${data.unmatched.join(', ')}`, 'error');
         setStatus('ok');
       }
     } catch (e) { addLog(`Network error: ${e.message}`, 'error'); setStatus('error'); }
@@ -129,13 +146,21 @@ export default function Ingest() {
           <IngestStep
             number={1}
             title="CFBD Sync"
-            desc="Pull kickoff times, TV networks, and O/U from CFBD API and update the games table. Shared by both models."
+            desc="Pull kickoff times, TV networks, and O/U from CFBD API and update the games table. Shared by both models. Now matches team names the same way grading does, fixing games that used to stay stuck on TBD."
             action="Run CFBD Sync"
             onClick={runCFBDSync}
             loading={loading}
           />
           <IngestStep
             number={2}
+            title="Sync Team Logos"
+            desc="Fill in any missing team_logos rows from CFBD's own logo CDN, matched the same way as CFBD Sync. Only fills gaps — never overwrites an existing logo. Shared by both models."
+            action="Sync Logos"
+            onClick={runTeamLogoSync}
+            loading={loading}
+          />
+          <IngestStep
+            number={3}
             title="Compute Engine"
             desc="Run the model-of-models engine on raw_predictions to produce game_metrics (consensus, edge, MSS, plays)."
             action="Run Compute"
@@ -143,7 +168,7 @@ export default function Ingest() {
             loading={loading}
           />
           <IngestStep
-            number={3}
+            number={4}
             title="Grade Results"
             desc="After games are final, pull scores from CFBD and grade all pick_grades and user_picks."
             action="Grade Results"
@@ -151,7 +176,7 @@ export default function Ingest() {
             loading={loading}
           />
           <IngestStep
-            number={4}
+            number={5}
             title="Recalibrate Models"
             desc="Grade every individual system against the completed weeks, blend 80% current-season / 20% 2021-2025 history, and write next week's Top-7 pool. Shared by both models."
             action="Recalibrate Models"
@@ -165,7 +190,7 @@ export default function Ingest() {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
           <IngestStep
-            number={5}
+            number={6}
             title="PSS Compute"
             desc="Run the Dynamic Top-K cascade (3→5→7) and Play Strength Score against the same weekly Top-7 pool, writing to pss_game_metrics."
             action="Run PSS Compute"
@@ -173,7 +198,7 @@ export default function Ingest() {
             loading={loading}
           />
           <IngestStep
-            number={6}
+            number={7}
             title="PSS Grade"
             desc="After games are final, grade pss_pick_grades and pss_user_picks against CFBD scores."
             action="Grade PSS Results"
