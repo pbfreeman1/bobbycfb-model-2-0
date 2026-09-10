@@ -96,11 +96,41 @@ function TeamMark({ logoUrl, name }) {
     </div>
   );
 }
+// Same fields as the quick-add form on /research (source, side, type) —
+// this is a compact version for adding a tag without leaving the board.
+function ResearchQuickAdd({ home, away, onAdd, onDone }) {
+  const [source, setSource] = useState('');
+  const [side, setSide] = useState('home');
+  const [type, setType] = useState('spread');
+  const [saving, setSaving] = useState(false);
+  const inputStyle = { ...FM, fontSize: 11, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, padding: '5px 8px', color: C.text };
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', padding: '8px 0' }}>
+      <input placeholder="Source (e.g. Bill C.)" value={source} onChange={(e) => setSource(e.target.value)} style={{ ...inputStyle, width: 150 }} />
+      <select value={side} onChange={(e) => setSide(e.target.value)} style={inputStyle}>
+        <option value="home">{home}</option>
+        <option value="away">{away}</option>
+        <option value="over">Over</option>
+        <option value="under">Under</option>
+      </select>
+      <select value={type} onChange={(e) => setType(e.target.value)} style={inputStyle}>
+        <option value="spread">Spread</option>
+        <option value="total">Total</option>
+        <option value="moneyline">ML</option>
+      </select>
+      <button disabled={saving || !source.trim()} onClick={async () => { setSaving(true); try { await onAdd(source.trim(), side, type); setSource(''); } finally { setSaving(false); } }}
+        style={{ ...FM, fontSize: 11, padding: '5px 10px', borderRadius: 3, border: `1px solid ${C.pss}`, background: `${C.pss}1A`, color: C.pss, cursor: saving ? 'default' : 'pointer', opacity: saving || !source.trim() ? 0.6 : 1 }}>
+        Add tag
+      </button>
+      <button onClick={onDone} style={{ background: 'none', border: 'none', color: C.sub, cursor: 'pointer', fontSize: 13 }}>✕</button>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Game card
 // ---------------------------------------------------------------------------
-function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, notesDraft, onSetLean, onSetNotesDraft, onCommitNotes, onAddPlay, onRemovePlay }) {
+function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, notesDraft, onSetLean, onSetNotesDraft, onCommitNotes, onAddPlay, onRemovePlay, researchTags, onAddResearchTag, onRemoveResearchTag }) {
   const { game, gm, pm } = row;
   const home = game.home_team, away = game.away_team;
   const mp = mssPick(gm, home, away);
@@ -113,9 +143,13 @@ function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, not
   const [playSide, setPlaySide] = useState('home');
   const [playUnits, setPlayUnits] = useState(1);
   const [saving, setSaving] = useState(false);
+  const [showTagForm, setShowTagForm] = useState(false);
 
   const leanSide = picks?.lean?.side ?? null;
   const plays = picks?.plays ?? [];
+  const tags = researchTags ?? [];
+  const tagLabel = (t) => t.pick_side === 'home' ? home : t.pick_side === 'away' ? away : t.pick_side;
+  const tagCounts = tags.reduce((acc, t) => { const k = tagLabel(t); acc[k] = (acc[k] || 0) + 1; return acc; }, {});
 
   return (
     <div style={{
@@ -170,6 +204,11 @@ function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, not
             ? <span style={{ ...FM, fontSize: 11, color: C.agree, display: 'inline-flex', alignItems: 'center', gap: 4 }}>✓ Models agree</span>
             : <span style={{ ...FM, fontSize: 11, color: C.sub, display: 'inline-flex', alignItems: 'center', gap: 4 }}>✕ Split</span>
         )}
+        {tags.length > 0 && (
+          <span style={{ ...FM, fontSize: 11, color: C.sub, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            🏷 {Object.entries(tagCounts).map(([k, v]) => `${k} ${v}`).join(', ')}
+          </span>
+        )}
       </div>
 
       {expanded && (
@@ -213,6 +252,29 @@ function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, not
               </div>
             ) : (
               <div style={{ ...FM, fontSize: 12, color: C.dim }}>No MSS data for this game.</div>
+            )}
+          </div>
+
+          {/* Research tags */}
+          <div style={{ padding: '10px 18px', borderBottom: `1px solid ${C.border}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ ...FH, fontSize: 10.5, color: C.sub }}>RESEARCH TAGS</span>
+              {tags.map((t) => (
+                <span key={t.id} style={{ ...FM, fontSize: 10.5, padding: '2px 7px', borderRadius: 3, background: C.surface2, color: C.sub, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  {t.source_label || 'source'} → {tagLabel(t)}
+                  <button onClick={() => onRemoveResearchTag(game.id, t.id)} style={{ background: 'none', border: 'none', color: C.dim, cursor: 'pointer', padding: 0, fontSize: 10 }}>✕</button>
+                </span>
+              ))}
+              <button onClick={() => setShowTagForm((s) => !s)} style={{ ...FM, fontSize: 10.5, display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: `1px dashed ${C.border}`, borderRadius: 3, padding: '3px 8px', color: C.sub, cursor: 'pointer' }}>
+                + Tag
+              </button>
+            </div>
+            {showTagForm && (
+              <ResearchQuickAdd
+                home={home} away={away}
+                onAdd={async (source, side, type) => { await onAddResearchTag(game.id, source, side, type); setShowTagForm(false); }}
+                onDone={() => setShowTagForm(false)}
+              />
             )}
           </div>
 
@@ -302,6 +364,8 @@ export default function Dashboard() {
   // row (pick_type='note', or status='lean') rather than a separate table —
   // see PR4 handoff notes for why.
   const [picksByGame, setPicksByGame] = useState({});
+  // Research tags (research_picks), keyed by game id: [row, ...].
+  const [researchByGame, setResearchByGame] = useState({});
   // Text currently in each note input, separate from the committed row so
   // typing doesn't fire a request per keystroke — committed onBlur.
   const [notesDraftByGame, setNotesDraftByGame] = useState({});
@@ -359,9 +423,22 @@ export default function Dashboard() {
           } catch (e) {
             console.error('Failed to load picks:', e);
           }
+          try {
+            const tags = await sbFetch(`research_picks?select=*&game_id=in.(${ids})&order=created_at.asc`);
+            if (cancelled) return;
+            const groupedTags = {};
+            for (const t of tags) {
+              if (!groupedTags[t.game_id]) groupedTags[t.game_id] = [];
+              groupedTags[t.game_id].push(t);
+            }
+            setResearchByGame(groupedTags);
+          } catch (e) {
+            console.error('Failed to load research tags:', e);
+          }
         } else {
           setPicksByGame({});
           setNotesDraftByGame({});
+          setResearchByGame({});
         }
       } catch (e) {
         if (!cancelled) setError(String(e.message || e));
@@ -441,6 +518,25 @@ export default function Dashboard() {
   async function removePlay(gameId, pickId) {
     await sbFetch(`my_picks?id=eq.${pickId}`, { method: 'DELETE' });
     setPicksByGame((prev) => ({ ...prev, [gameId]: { ...prev[gameId], plays: prev[gameId].plays.filter((p) => p.id !== pickId) } }));
+  }
+
+  // Research tags: same table/shape as /research's research_picks, any
+  // number per game.
+  async function addResearchTag(gameId, source, side, type) {
+    const row = rows.find((r) => r.game.id === gameId);
+    const [created] = await sbFetch(`research_picks`, {
+      method: 'POST',
+      body: JSON.stringify({
+        season, week, game_id: gameId,
+        home_team: row?.game.home_team, away_team: row?.game.away_team,
+        pick_side: side, pick_type: type, source_label: source,
+      }),
+    });
+    setResearchByGame((prev) => ({ ...prev, [gameId]: [...(prev[gameId] || []), created] }));
+  }
+  async function removeResearchTag(gameId, tagId) {
+    await sbFetch(`research_picks?id=eq.${tagId}`, { method: 'DELETE' });
+    setResearchByGame((prev) => ({ ...prev, [gameId]: (prev[gameId] || []).filter((t) => t.id !== tagId) }));
   }
 
   // Ranks computed off the full fetched set, independent of filtering.
@@ -557,6 +653,7 @@ export default function Dashboard() {
                 picks={picksByGame[r.game.id]} notesDraft={notesDraftByGame[r.game.id]}
                 onSetLean={setLean} onSetNotesDraft={setNotesDraft} onCommitNotes={commitNotes}
                 onAddPlay={addPlay} onRemovePlay={removePlay}
+                researchTags={researchByGame[r.game.id]} onAddResearchTag={addResearchTag} onRemoveResearchTag={removeResearchTag}
               />
             ))}
             {filtered.length === 0 && <div style={{ ...FM, fontSize: 12, color: C.sub, padding: '20px 0' }}>No games match these filters.</div>}
