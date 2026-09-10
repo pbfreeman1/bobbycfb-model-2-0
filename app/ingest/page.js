@@ -75,11 +75,43 @@ export default function Ingest() {
     finally { setLoading(false); }
   }
 
+  async function runPSSCompute() {
+    setLoading(true); setStatus(null);
+    addLog(`Running BobbyPSSModel Dynamic Top-K + PSS engine for ${season} Week ${week}…`);
+    try {
+      const res = await fetch(`/api/pss-compute?season=${season}&week=${week}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.error) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
+      else {
+        addLog(`Computed PSS for ${data.games || 0} games using Week ${data.snapshot_week} model rankings. Qualified plays: ${data.qualified_plays || 0}`, 'ok');
+        if (data.warning) addLog(data.warning, 'error');
+        setStatus('ok');
+      }
+    } catch (e) { addLog(`Network error: ${e.message}`, 'error'); setStatus('error'); }
+    finally { setLoading(false); }
+  }
+
+  async function runPSSGrade() {
+    setLoading(true); setStatus(null);
+    addLog(`Grading BobbyPSSModel results for ${season} Week ${week}…`);
+    try {
+      const res = await fetch(`/api/pss-grade?season=${season}&week=${week}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.error) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
+      else {
+        addLog(`Matched ${data.games_matched}/${data.cfbd_games} games, graded ${data.metrics_graded} PSS consensus picks and ${data.picks_graded} user picks.`, 'ok');
+        if (data.unmatched?.length) addLog(`Unmatched: ${data.unmatched.map(u => `${u.cfbd_home} vs ${u.cfbd_away}`).join(', ')}`, 'error');
+        setStatus('ok');
+      }
+    } catch (e) { addLog(`Network error: ${e.message}`, 'error'); setStatus('error'); }
+    finally { setLoading(false); }
+  }
+
   return (
     <div className="page">
       <div className="page-header">
         <h1>⚙️ Data Ingest</h1>
-        <p>Pull CFBD schedule/TV/O/U data, trigger compute engine, grade completed games</p>
+        <p>Pull CFBD schedule/TV/O/U data, trigger compute engines, grade completed games</p>
       </div>
 
       <div className="card" style={{ marginBottom: 20 }}>
@@ -90,11 +122,14 @@ export default function Ingest() {
           <input type="number" value={week} onChange={e => setWeek(+e.target.value)} style={{ ...inp, width: 70 }} />
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', color: '#5b6272', marginBottom: 10 }}>
+          Original BobbyCFB Model
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12, marginBottom: 24 }}>
           <IngestStep
             number={1}
             title="CFBD Sync"
-            desc="Pull kickoff times, TV networks, and O/U from CFBD API and update the games table."
+            desc="Pull kickoff times, TV networks, and O/U from CFBD API and update the games table. Shared by both models."
             action="Run CFBD Sync"
             onClick={runCFBDSync}
             loading={loading}
@@ -118,9 +153,31 @@ export default function Ingest() {
           <IngestStep
             number={4}
             title="Recalibrate Models"
-            desc="Grade every individual system against the completed weeks, blend 80% current-season / 20% 2021-2025 history, and write next week's Top-7 pool."
+            desc="Grade every individual system against the completed weeks, blend 80% current-season / 20% 2021-2025 history, and write next week's Top-7 pool. Shared by both models."
             action="Recalibrate Models"
             onClick={runRecalibrate}
+            loading={loading}
+          />
+        </div>
+
+        <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', color: '#5b6272', marginBottom: 10 }}>
+          🧠 BobbyPSSModel (Dynamic Top-K + PSS)
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
+          <IngestStep
+            number={5}
+            title="PSS Compute"
+            desc="Run the Dynamic Top-K cascade (3→5→7) and Play Strength Score against the same weekly Top-7 pool, writing to pss_game_metrics."
+            action="Run PSS Compute"
+            onClick={runPSSCompute}
+            loading={loading}
+          />
+          <IngestStep
+            number={6}
+            title="PSS Grade"
+            desc="After games are final, grade pss_pick_grades and pss_user_picks against CFBD scores."
+            action="Grade PSS Results"
+            onClick={runPSSGrade}
             loading={loading}
           />
         </div>
@@ -149,8 +206,8 @@ export default function Ingest() {
           <li>Download the week's predictions CSV from thepredictiontracker.com</li>
           <li>Paste the insert SQL into Supabase SQL Editor (raw_predictions batch insert)</li>
           <li>Run CFBD Sync above to populate kickoff times, TV, and O/U</li>
-          <li>Run Compute Engine to generate game_metrics and suggested plays</li>
-          <li>After games are played, set Week to that completed week, run Grade Results, then run Recalibrate Models &mdash; this updates the Top-7 pool used starting the following week</li>
+          <li>Run Compute Engine (original model) and/or PSS Compute (BobbyPSSModel) — both read the same games/raw_predictions/model_grades, so order between them doesn't matter</li>
+          <li>After games are played, set Week to that completed week, run Grade Results and/or PSS Grade, then run Recalibrate Models — this updates the shared Top-7 pool used by both models starting the following week</li>
         </ol>
       </div>
     </div>
