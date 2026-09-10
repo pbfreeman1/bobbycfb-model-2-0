@@ -45,7 +45,9 @@ function favoredMarket(line, homeTeam, awayTeam) {
 }
 function favored(team, num) {
   if (num === null || num === undefined || Number.isNaN(num)) return `${team} —`;
-  return `${team} -${Math.abs(num).toFixed(1)}`;
+  const n = Number(num);
+  if (Number.isNaN(n)) return `${team} —`;
+  return `${team} ${n > 0 ? '+' : ''}${n.toFixed(1)}`;
 }
 // MSS doesn't always populate suggested_side (only when suggested_play is
 // true), so its "pick" — unlike PSS's — is derived from edge sign, same as
@@ -62,6 +64,23 @@ function pssPick(pm, homeTeam, awayTeam) {
   const side = pm.suggested_side;
   const team = side === 'home' ? homeTeam : awayTeam;
   return { side, team, num: spreadForSide(pm.consensus_spread, side) };
+}
+// Renders a logged play the way it should read on a card: side + the actual
+// number taken, e.g. "Oregon -22.5" / "Oklahoma St. +22.5" / "Over 55.5".
+// line_played is stored in the raw home-positive convention, same as
+// games.current_line, so it goes through spreadForSide first.
+function playLabel(pick, home, away) {
+  const type = pick.pick_type;
+  const line = pick.line_played;
+  if (type === 'total') {
+    const label = pick.side === 'over' ? 'Over' : 'Under';
+    return line == null ? label : `${label} ${Number(line).toFixed(1)}`;
+  }
+  const team = pick.side === 'home' ? home : away;
+  if (type === 'moneyline' || type === 'ml') return `${team} ML`;
+  const n = spreadForSide(line, pick.side);
+  if (n === null) return `${team} ATS`;
+  return `${team} ${n > 0 ? '+' : ''}${n.toFixed(1)}`;
 }
 function fmtLineMove(n) {
   if (n === null || n === undefined || Number.isNaN(n)) return null;
@@ -179,7 +198,15 @@ function ModalTabs({ tab, setTab, tabs }) {
 function ModelBreakdownTable({ row }) {
   const { game, gm, pm } = row;
   const home = game.home_team, away = game.away_team;
-  const vegasLine = parseFloat(gm?.vegas_line ?? pm?.vegas_line ?? 0);
+  // The line the model was actually scored against. pss_game_metrics.vegas_line
+  // is authoritative; fall back to the game's live line. Never default to 0 —
+  // that made “edge vs market” render as the raw predicted spread.
+  const vegasLine = (() => {
+    const raw = pm?.vegas_line ?? gm?.vegas_line ?? game.current_line ?? null;
+    if (raw === null || raw === undefined) return null;
+    const v = parseFloat(raw);
+    return Number.isNaN(v) ? null : v;
+  })();
   const topkIds = gm?.topk_model_ids || pm?.topk_model_ids || [];
 
   const [models, setModels] = useState(null);
@@ -212,10 +239,10 @@ function ModelBreakdownTable({ row }) {
 
   // PSS component breakdown rows (mirrors PSS DetailPanel section B)
   const pssComponents = pm ? [
-    { label: 'Edge',       actual: pm.edge != null ? (pm.edge > 0 ? `+${pm.edge.toFixed(1)}` : pm.edge.toFixed(1)) : '—', score: pm.edge_score,      weight: 30 },
-    { label: 'MSS',        actual: pm.mss_score != null ? pm.mss_score.toFixed(1) : '—',                                   score: pm.mss_score,       weight: 25 },
+    { label: 'Edge',       actual: pm.edge != null ? (pm.edge > 0 ? `+${Number(pm.edge).toFixed(1)}` : Number(pm.edge).toFixed(1)) : '—', score: pm.edge_score,      weight: 30 },
+    { label: 'MSS',        actual: pm.raw_mss != null ? Number(pm.raw_mss).toFixed(2) : '—',                                score: pm.mss_score,       weight: 25 },
     { label: 'Agreement',  actual: pm.agreement_count != null ? `${pm.agreement_count}/${pm.agreement_k}` : (pm.agreement != null ? `${Math.round(pm.agreement * 100)}%` : '—'), score: pm.agreement_score, weight: 20 },
-    { label: 'STD',        actual: pm.stddev != null ? pm.stddev.toFixed(2) : '—',                                         score: pm.stddev_score,    weight: 15 },
+    { label: 'STD',        actual: pm.stddev != null ? Number(pm.stddev).toFixed(2) : '—',                                  score: pm.stddev_score,    weight: 15 },
     { label: 'Historical', actual: pm.historical_tier || '—',                                                               score: pm.historical_score, weight: 10 },
   ] : null;
   const pssTotal = pssComponents ? pssComponents.reduce((a, c) => a + ((c.score || 0) * c.weight) / 100, 0) : null;
@@ -281,15 +308,15 @@ function ModelBreakdownTable({ row }) {
                 <tbody>
                   {models.map((m, i) => {
                     const pred = parseFloat(m.predicted_margin);
-                    const edge = pred - vegasLine;
-                    const side = edge > 0 ? home : edge < 0 ? away : 'Even';
-                    const edgeColor = Math.abs(edge) >= 1.5 ? C.agree : C.sub;
+                    const edge = vegasLine === null ? null : pred - vegasLine;
+                    const side = edge === null ? '—' : edge > 0 ? home : edge < 0 ? away : 'Even';
+                    const edgeColor = edge !== null && Math.abs(edge) >= 1.5 ? C.agree : C.sub;
                     return (
                       <tr key={m.model_id} style={{ background: i % 2 === 0 ? 'transparent' : C.surface2 }}>
                         <td style={{ ...tdStyle, color: C.text }}>{m.source_models?.system_name || 'Unknown'}</td>
                         <td style={{ ...tdStyle, color: C.sub }}>{pred > 0 ? `+${pred.toFixed(1)}` : pred.toFixed(1)}</td>
-                        <td style={{ ...tdStyle, color: edgeColor }}>{edge > 0 ? `+${edge.toFixed(1)}` : edge.toFixed(1)}</td>
-                        <td style={{ ...tdStyle, color: edge > 0 ? C.agree : C.pss }}>{side}</td>
+                        <td style={{ ...tdStyle, color: edgeColor }}>{edge === null ? '—' : edge > 0 ? `+${edge.toFixed(1)}` : edge.toFixed(1)}</td>
+                        <td style={{ ...tdStyle, color: edge !== null && edge > 0 ? C.agree : C.pss }}>{side}</td>
                       </tr>
                     );
                   })}
@@ -507,29 +534,64 @@ function bucketBy(graded, keyFn, order) {
 // ---------------------------------------------------------------------------
 // My Card modal — this week's picks, straight from already-loaded state.
 // ---------------------------------------------------------------------------
-function MyCardModal({ rows, picksByGame, onClose }) {
-  const withPicks = rows.filter((r) => {
-    const p = picksByGame[r.game.id];
-    return p && (p.plays.length > 0 || p.lean);
-  });
-  const totalUnits = withPicks.flatMap((r) => picksByGame[r.game.id].plays).reduce((s, p) => s + parseFloat(p.units || 0), 0);
+function MyCardModal({ rows, picksByGame, pssPicksByGame, onClose }) {
+  // Picks live in two tables: user_picks (BobbyModel / MSS) and pss_user_picks
+  // (BobbyPSS). The card is the consolidated view, so it reads both.
+  const entries = rows.map((r) => {
+    const gid = r.game.id;
+    const mss = picksByGame[gid] || { lean: null, note: null, plays: [] };
+    const pssRows = pssPicksByGame[gid] || [];
+    // The same bet can be logged from both dashboards. Collapse identical
+    // (type, side, number) plays into one row carrying both model tags,
+    // otherwise unit exposure gets double-counted.
+    const merged = [];
+    const seen = {};
+    const push = (p, model) => {
+      const key = `${p.pick_type}|${p.side}|${p.line_played}`;
+      if (seen[key]) {
+        if (!seen[key]._models.includes(model)) seen[key]._models.push(model);
+        seen[key].units = Math.max(parseFloat(seen[key].units) || 0, parseFloat(p.units) || 0);
+        return;
+      }
+      const entry = { ...p, _models: [model] };
+      seen[key] = entry;
+      merged.push(entry);
+    };
+    (mss.plays || []).forEach((p) => push(p, 'MSS'));
+    pssRows
+      .filter((p) => p.pick_type && p.pick_type !== 'note' && p.status !== 'lean')
+      .forEach((p) => push(p, 'PSS'));
+    const plays = merged;
+    const pssLean = pssRows.find((p) => p.status === 'lean') || null;
+    return { r, plays, lean: mss.lean || pssLean };
+  }).filter((e) => e.plays.length > 0 || e.lean);
+
+  const totalUnits = entries
+    .flatMap((e) => e.plays)
+    .reduce((sum, p) => sum + (parseFloat(p.units) || 0), 0);
+
+  const MODEL_COLOR = { PSS: C.pss, MSS: C.mss };
+
   return (
     <Modal title="My card — this week" onClose={onClose} wide>
-      <div style={{ ...FM, fontSize: 12, color: C.sub, marginBottom: 16 }}>{withPicks.length} games · {totalUnits.toFixed(1)}u total exposure</div>
-      {withPicks.length === 0 && <div style={{ ...FM, fontSize: 12, color: C.sub }}>No plays or leans logged yet — add one from any game card.</div>}
-      {withPicks.map((r) => {
-        const p = picksByGame[r.game.id];
+      <div style={{ ...FM, fontSize: 12, color: C.sub, marginBottom: 16 }}>
+        {entries.length} games · {entries.reduce((n, e) => n + e.plays.length, 0)} plays · {totalUnits.toFixed(1)}u total exposure
+      </div>
+      {entries.length === 0 && <div style={{ ...FM, fontSize: 12, color: C.sub }}>No plays or leans logged yet — add one from any game card.</div>}
+      {entries.map(({ r, plays, lean }) => {
         const home = r.game.home_team, away = r.game.away_team;
         return (
           <div key={r.game.id} style={{ padding: '10px 0', borderBottom: `1px solid ${C.border}` }}>
             <div style={{ ...FH, fontSize: 13, color: C.text, marginBottom: 6 }}>{away} @ {home}</div>
-            {p.lean && <div style={{ ...FM, fontSize: 12, color: C.pss, marginBottom: 3 }}>Lean: {p.lean.side === 'home' ? home : away}</div>}
-            {p.plays.map((pk) => (
-              <div key={pk.id} style={{ ...FM, fontSize: 12, color: C.sub, display: 'flex', gap: 10 }}>
-                <span style={{ color: C.agree }}>{pk.units}u</span>
-                <span style={{ color: C.text }}>
-                  {pk.pick_type === 'spread' ? `${pk.side === 'home' ? home : away} ATS` : pk.pick_type === 'total' ? `${pk.side === 'over' ? 'Over' : 'Under'} ${fmt(r.game.over_under, 1)}` : `${pk.side === 'home' ? home : away} ML`}
-                </span>
+            {lean && <div style={{ ...FM, fontSize: 12, color: C.pss, marginBottom: 3 }}>Lean: {lean.side === 'home' ? home : away}</div>}
+            {plays.map((pk) => (
+              <div key={pk.id} style={{ ...FM, fontSize: 12, color: C.sub, display: 'flex', gap: 10, alignItems: 'center', padding: '2px 0' }}>
+                <span style={{ color: C.agree }}>{(parseFloat(pk.units) || 1).toFixed(pk.units % 1 === 0 ? 0 : 1)}u</span>
+                <span style={{ color: C.text }}>{playLabel(pk, home, away)}</span>
+                {pk._models.map((mdl) => (
+                  <span key={mdl} style={{ fontSize: 9.5, color: MODEL_COLOR[mdl], border: `1px solid ${MODEL_COLOR[mdl]}`, borderRadius: 3, padding: '1px 5px' }}>{mdl}</span>
+                ))}
+                {pk.status && pk.status !== 'official' && <span style={{ fontSize: 9.5, color: C.dim }}>{pk.status}</span>}
               </div>
             ))}
           </div>
@@ -734,6 +796,26 @@ function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, not
         ) : (
           <span style={{ ...FM, fontSize: 11.5, color: C.dim }}>PSS not computed for this game yet</span>
         )}
+        {pp && (
+          <>
+            <div style={{ width: 1, height: 20, background: C.border }} />
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, flexWrap: 'wrap' }}>
+              <span style={{ ...FM, fontSize: 11.5, color: C.sub }}>
+                PICK <span style={{ color: C.pss }}>{favored(pp.team, spreadForSide(game.current_line, pp.side))}</span>
+              </span>
+              <span style={{ ...FM, fontSize: 11.5, color: C.sub }}>
+                CONSENSUS <span style={{ color: C.text }}>{favored(pp.team, pp.num)}</span>
+              </span>
+              {pm?.edge != null && (
+                <span style={{ ...FM, fontSize: 11.5, color: C.sub }}>
+                  EDGE <span style={{ color: Math.abs(Number(pm.edge)) >= 1.5 ? C.agree : C.text }}>
+                    {Number(pm.edge) > 0 ? `+${Number(pm.edge).toFixed(1)}` : Number(pm.edge).toFixed(1)}
+                  </span>
+                </span>
+              )}
+            </div>
+          </>
+        )}
         <div style={{ width: 1, height: 20, background: C.border }} />
         {gm ? (
           <span style={{ ...FM, fontSize: 11.5, color: C.mss }}>MSS {fmt(gm.mss, 1)} · {gm.confidence_bin || '—'}{gm.suggested_play ? ' ✓' : ''}</span>
@@ -931,6 +1013,7 @@ export default function Dashboard() {
   const [drilldownRow, setDrilldownRow] = useState(null);
   const [showLegend, setShowLegend] = useState(false);
   const [showStats, setShowStats] = useState(false);
+  const [pssPicksByGame, setPssPicksByGame] = useState({});
   const [showCard, setShowCard] = useState(false);
 
   useEffect(() => {
@@ -953,7 +1036,7 @@ export default function Dashboard() {
           sbFetch(
             `games?select=id,home_team,away_team,kickoff_at,current_line,opening_line,over_under,tv_network,status,` +
             `game_metrics(edge,agreement,stddev,mss,confidence_bin,suggested_play,suggested_side,suggested_line,consensus_spread,valid_model_count,topk_model_ids),` +
-            `pss_game_metrics(pss,pss_bin,decision,qualifies,qualifying_tier,signal_type,selected_k,agreement,stddev,edge,consensus_spread,suggested_side,suggested_line,pss_drivers,warnings,mss_score,market_alignment,historical_tier)` +
+            `pss_game_metrics(pss,pss_bin,decision,qualifies,qualifying_tier,signal_type,selected_k,agreement,agreement_count,agreement_k,stddev,edge,consensus_spread,vegas_line,suggested_side,suggested_line,pss_drivers,warnings,raw_mss,mss_score,edge_score,agreement_score,stddev_score,historical_score,market_alignment,historical_tier)` +
             `&season=eq.${season}&week=eq.${week}`
           ),
           sbFetch(`team_logos?select=team_name,logo_url`),
@@ -1028,6 +1111,19 @@ export default function Dashboard() {
               else grouped[p.game_id].plays.push(p);
             }
             setPicksByGame(grouped);
+            try {
+              const pssPicks = await sbFetch(`pss_user_picks?select=*&game_id=in.(${ids})&order=created_at.asc`);
+              if (!cancelled) {
+                const pssGrouped = {};
+                for (const p of pssPicks) {
+                  if (!pssGrouped[p.game_id]) pssGrouped[p.game_id] = [];
+                  pssGrouped[p.game_id].push(p);
+                }
+                setPssPicksByGame(pssGrouped);
+              }
+            } catch (e) {
+              console.error('Failed to load PSS picks:', e);
+            }
             const drafts = {};
             for (const gid of Object.keys(grouped)) drafts[gid] = grouped[gid].note?.note ?? '';
             setNotesDraftByGame(drafts);
@@ -1048,6 +1144,7 @@ export default function Dashboard() {
           }
         } else {
           setPicksByGame({});
+          setPssPicksByGame({});
           setNotesDraftByGame({});
           setResearchByGame({});
         }
@@ -1218,7 +1315,7 @@ export default function Dashboard() {
         )}
         {showLegend && <LegendModal onClose={() => setShowLegend(false)} />}
         {showStats && <SeasonStatsModal season={season} week={week} onClose={() => setShowStats(false)} />}
-        {showCard && <MyCardModal rows={rows} picksByGame={picksByGame} onClose={() => setShowCard(false)} />}
+        {showCard && <MyCardModal rows={rows} picksByGame={picksByGame} pssPicksByGame={pssPicksByGame} onClose={() => setShowCard(false)} />}
 
         {/* Top bar */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18, flexWrap: 'wrap', gap: 12 }}>
