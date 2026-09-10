@@ -1,11 +1,17 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { sbFetch, fmt } from '../../lib/supabase';
+import { sbFetch, fmt, getCurrentWeek } from '../../lib/supabase';
 
 export default function Results() {
   const [season, setSeason] = useState(2026);
-  const [week, setWeek] = useState(1);
+  const [week, setWeek] = useState(null); // resolved to the latest week with games below
   const [mode, setMode] = useState('week'); // 'week' | 'season'
+
+  useEffect(() => {
+    let cancelled = false;
+    getCurrentWeek(season).then((w) => { if (!cancelled) setWeek(w); });
+    return () => { cancelled = true; };
+  }, [season]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [sortKey, setSortKey] = useState('ats_pct');
@@ -44,7 +50,7 @@ export default function Results() {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { load(); }, [season, week, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (week != null) load(); }, [season, week, mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sorted = [...modelRows].sort((a, b) => {
     const av = a[sortKey] ?? -Infinity;
@@ -73,7 +79,7 @@ export default function Results() {
           <label style={{ fontSize: 12, color: '#8a92a3' }}>Season</label>
           <input type="number" value={season} onChange={(e) => setSeason(+e.target.value)} style={inp} />
           <label style={{ fontSize: 12, color: '#8a92a3' }}>Week</label>
-          <input type="number" value={week} onChange={(e) => setWeek(+e.target.value)} style={{ ...inp, width: 70 }} />
+          <input type="number" value={week ?? ''} onChange={(e) => setWeek(+e.target.value)} style={{ ...inp, width: 70 }} />
           <div style={{ display: 'flex', border: '1px solid #2a3042', borderRadius: 6, overflow: 'hidden' }}>
             <button
               onClick={() => setMode('week')}

@@ -1,14 +1,22 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { sbFetch, fmt, fmtLine, fmtKickoff, CONFIDENCE_ORDER, CONF_BADGE_CLASS } from '../../lib/supabase';
+import { sbFetch, fmt, fmtLine, fmtKickoff, getCurrentWeek, CONFIDENCE_ORDER, CONF_BADGE_CLASS } from '../../lib/supabase';
 
 export default function WeeklyBoard() {
   const [season, setSeason] = useState(2026);
-  const [week, setWeek] = useState(1);
+  const [week, setWeek] = useState(null); // resolved to the latest week with games below
   const [games, setGames] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [expanded, setExpanded] = useState(null);
+
+  // Default to the current/latest week that has games, rather than always
+  // opening on Week 1. Still fully overridable via the week selector.
+  useEffect(() => {
+    let cancelled = false;
+    getCurrentWeek(season).then((w) => { if (!cancelled) setWeek(w); });
+    return () => { cancelled = true; };
+  }, [season]);
 
   const load = async () => {
     setLoading(true); setError(null);
@@ -19,7 +27,7 @@ export default function WeeklyBoard() {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { load(); }, [season, week]);
+  useEffect(() => { if (week != null) load(); }, [season, week]);
 
   const plays = games.filter(g => {
     const m = Array.isArray(g.game_metrics) ? g.game_metrics[0] : g.game_metrics;
@@ -37,7 +45,7 @@ export default function WeeklyBoard() {
           <label style={{ fontSize: 12, color: '#8a92a3' }}>Season</label>
           <input type="number" value={season} onChange={e => setSeason(+e.target.value)} style={inp} />
           <label style={{ fontSize: 12, color: '#8a92a3' }}>Week</label>
-          <input type="number" value={week} onChange={e => setWeek(+e.target.value)} style={{ ...inp, width: 60 }} />
+          <input type="number" value={week ?? ''} onChange={e => setWeek(+e.target.value)} style={{ ...inp, width: 60 }} />
           <button className="btn btn-outline" onClick={load} style={{ fontSize: 12 }}>↻ Refresh</button>
         </div>
       </div>

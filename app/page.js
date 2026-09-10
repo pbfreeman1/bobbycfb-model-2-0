@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { getCurrentWeek } from '../lib/supabase';
 
 const SUPABASE_URL = 'https://zpmdrazbqgzheqkvfltv.supabase.co';
 const SUPABASE_ANON_KEY =
@@ -572,7 +573,7 @@ function CustomPlayModal({ season, week, onClose, onSaved }) {
 
 export default function Dashboard() {
   const [season, setSeason] = useState(2026);
-  const [week, setWeek] = useState(1);
+  const [week, setWeek] = useState(null); // resolved to the latest week with games below
   const [rows, setRows] = useState([]);
   const [picksByGame, setPicksByGame] = useState({});
   const [logos, setLogos] = useState({});
@@ -701,7 +702,13 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
-    loadWeek();
+    let cancelled = false;
+    getCurrentWeek(season).then((w) => { if (!cancelled) setWeek(w); });
+    return () => { cancelled = true; };
+  }, [season]);
+
+  useEffect(() => {
+    if (week != null) loadWeek();
   }, [season, week]);
 
   async function loadSeasonStats() {
@@ -1323,7 +1330,7 @@ export default function Dashboard() {
         </div>
         <div className="control">
           <label>Week</label>
-          <input type="number" value={week} onChange={(e) => setWeek(parseInt(e.target.value || '0', 10))} />
+          <input type="number" value={week ?? ''} onChange={(e) => setWeek(parseInt(e.target.value || '0', 10))} />
         </div>
         <div className="control">
           <label>Search team</label>

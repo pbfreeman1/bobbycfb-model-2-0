@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { SUPABASE_URL, SUPABASE_ANON_KEY, sbFetch, sbHeaders, fmt, fmtLine, fmtKickoff } from '../../lib/supabase';
+import { SUPABASE_URL, SUPABASE_ANON_KEY, sbFetch, sbHeaders, fmt, fmtLine, fmtKickoff, getCurrentWeek } from '../../lib/supabase';
 
 const SB_HDR = {
   apikey: SUPABASE_ANON_KEY,
@@ -10,7 +10,7 @@ const SB_HDR = {
 
 export default function MyCard() {
   const [season, setSeason] = useState(2026);
-  const [week, setWeek] = useState(1);
+  const [week, setWeek] = useState(null); // resolved to the latest week with games below
   const [picks, setPicks] = useState([]);
   const [games, setGames] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -43,7 +43,13 @@ export default function MyCard() {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { load(); }, [season, week]);
+  useEffect(() => {
+    let cancelled = false;
+    getCurrentWeek(season).then((w) => { if (!cancelled) setWeek(w); });
+    return () => { cancelled = true; };
+  }, [season]);
+
+  useEffect(() => { if (week != null) load(); }, [season, week]);
 
   async function toggleLock(pick) {
     // Unset any existing lock for this week first
@@ -241,7 +247,7 @@ export default function MyCard() {
           <label style={{ fontSize: 12, color: '#8a92a3' }}>Season</label>
           <input type="number" value={season} onChange={e => setSeason(+e.target.value)} style={inp} />
           <label style={{ fontSize: 12, color: '#8a92a3' }}>Week</label>
-          <input type="number" value={week} onChange={e => setWeek(+e.target.value)} style={{ ...inp, width: 60 }} />
+          <input type="number" value={week ?? ''} onChange={e => setWeek(+e.target.value)} style={{ ...inp, width: 60 }} />
         </div>
       </div>
 

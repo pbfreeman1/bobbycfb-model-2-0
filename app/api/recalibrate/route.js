@@ -41,13 +41,27 @@ export async function POST(req) {
   );
 
   try {
+    // 0. Models explicitly marked status='exclude' in source_models (line-derived
+    //    columns that are not independent predictions - lineca, lineavg, lineopen,
+    //    linemidweek, etc.) must never be eligible for Top-K selection. Some of these
+    //    (e.g. linemidweek) have real baseline rows from the historical data load, so
+    //    unlike the cleanly-never-loaded ones, they need to be actively filtered here
+    //    rather than just absent from the data.
+    const { data: excludedRows, error: exErr } = await supabase
+      .from('source_models')
+      .select('id')
+      .eq('status', 'exclude');
+    if (exErr) throw new Error(`source_models: ${exErr.message}`);
+    const excludedIds = new Set((excludedRows || []).map((r) => r.id));
+
     // 1. The immutable 2021-2025 baseline for every model (as_of_week=1, written once
     //    at the start of the season). This is always the "history" side of the blend -
     //    we never blend an already-blended row, to avoid compounding drift week over week.
-    const baseline = await fetchAllRows(supabase, 'model_grades', (q) =>
+    const rawBaseline = await fetchAllRows(supabase, 'model_grades', (q) =>
       q.select('model_id, games_graded, ats_wins, ats_losses, ats_pushes, mae, bias')
         .eq('as_of_season', season).eq('as_of_week', 1)
     );
+    const baseline = rawBaseline.filter((b) => !excludedIds.has(b.model_id));
     if (!baseline.length) {
       return Response.json({ error: `No as_of_week=1 baseline found for season ${season}. Run the initial backtest load first.` }, { status: 400 });
     }
