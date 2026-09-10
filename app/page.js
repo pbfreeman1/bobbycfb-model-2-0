@@ -128,9 +128,272 @@ function ResearchQuickAdd({ home, away, onAdd, onDone }) {
 }
 
 // ---------------------------------------------------------------------------
+// Modal shell shared by Drilldown / Legend / Season Stats / My Card
+// ---------------------------------------------------------------------------
+function Modal({ title, onClose, children, wide }) {
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 50,
+      display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '5vh 16px', overflowY: 'auto',
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6,
+        width: '100%', maxWidth: wide ? 720 : 520, padding: 24,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+          <div style={{ ...FH, fontSize: 16, color: C.text }}>{title}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.sub, cursor: 'pointer', fontSize: 16 }}>✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+function ModalTabs({ tab, setTab, tabs }) {
+  return (
+    <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
+      {tabs.map(([key, label, color]) => (
+        <button key={key} onClick={() => setTab(key)} style={{
+          ...FM, fontSize: 12, padding: '6px 14px', borderRadius: 4, cursor: 'pointer',
+          border: `1px solid ${tab === key ? color : C.border}`,
+          background: tab === key ? `${color}1A` : 'transparent',
+          color: tab === key ? color : C.sub,
+        }}>{label}</button>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Drilldown modal — every field the card trims out, for one game
+// ---------------------------------------------------------------------------
+function DrilldownModal({ row, range, agreementAll, onClose }) {
+  const [tab, setTab] = useState('pss');
+  const { game, gm, pm } = row;
+  const home = game.home_team, away = game.away_team;
+  const mp = mssPick(gm, home, away);
+  const pp = pssPick(pm, home, away);
+  return (
+    <Modal title={`${away} @ ${home} — full breakdown`} onClose={onClose} wide>
+      <ModalTabs tab={tab} setTab={setTab} tabs={[['pss', 'PSS Detail', C.pss], ['mss', 'MSS Detail', C.mss]]} />
+      {tab === 'pss' ? (
+        pm ? (
+          <div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px 16px', marginBottom: 16 }}>
+              <Stat label="PICK" value={pp ? favored(pp.team, pp.num) : '—'} size={16} />
+              <Stat label="PSS SCORE" value={fmt(pm.pss, 1)} size={16} color={DECISION_COLOR[pm.decision]} />
+              <Stat label="BIN" value={pm.pss_bin || '—'} color={PSS_BIN_COLOR[pm.pss_bin]} />
+              <Stat label="DECISION" value={pm.decision || '—'} color={DECISION_COLOR[pm.decision]} />
+              <Stat label="TOP-K TIER" value={pm.qualifying_tier ? `${TIER_LABEL[pm.qualifying_tier]} · ${pm.signal_type}` : `No tier (eval. to Top-${pm.selected_k})`} />
+              <Stat label="EDGE" value={fmt(pm.edge, 2)} />
+              <Stat label="AGREEMENT" value={pm.agreement != null ? `${Math.round(pm.agreement * 100)}%` : '—'} />
+              <Stat label="STDDEV" value={fmt(pm.stddev, 2)} />
+              <Stat label="MSS COMPONENT" value={fmt(pm.mss_score, 1)} />
+              <Stat label="MARKET ALIGNMENT" value={pm.market_alignment || '—'} />
+              <Stat label="HISTORICAL TIER" value={pm.historical_tier || '—'} />
+            </div>
+            <div style={{ ...FH, fontSize: 11, color: C.sub, marginBottom: 6 }}>DRIVERS</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+              {pm.pss_drivers?.length ? pm.pss_drivers.map((d, i) => <span key={i} style={{ ...FM, fontSize: 11, padding: '3px 8px', borderRadius: 3, background: `${C.agree}1F`, color: C.agree }}>+ {d}</span>) : <span style={{ ...FM, fontSize: 11, color: C.dim }}>None</span>}
+            </div>
+            <div style={{ ...FH, fontSize: 11, color: C.sub, marginBottom: 6 }}>WARNINGS</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {pm.warnings?.length ? pm.warnings.map((w, i) => <span key={i} style={{ ...FM, fontSize: 11, padding: '3px 8px', borderRadius: 3, background: `${C.warn}1F`, color: C.warn }}>! {w}</span>) : <span style={{ ...FM, fontSize: 11, color: C.dim }}>None</span>}
+            </div>
+          </div>
+        ) : <div style={{ ...FM, fontSize: 12, color: C.dim }}>No PSS data for this game.</div>
+      ) : (
+        gm ? (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px 16px' }}>
+            <Stat label="PICK" value={mp ? favored(mp.team, mp.num) : '—'} size={16} />
+            <Stat label="MSS" value={fmt(gm.mss, 1)} size={16} color={MSS_BIN_COLOR[gm.confidence_bin]} />
+            <Stat label="CONFIDENCE" value={gm.confidence_bin || '—'} color={MSS_BIN_COLOR[gm.confidence_bin]} />
+            <Stat label="EDGE" value={fmt(gm.edge, 2)} />
+            <Stat label="AGREEMENT (TOP-K)" value={gm.agreement != null ? `${Math.round(gm.agreement * 100)}%` : '—'} />
+            <Stat label="AGREEMENT (ALL)" value={agreementAll ? `${Math.round(agreementAll.pct)}% (${agreementAll.count}/${agreementAll.total})` : '—'} />
+            <Stat label="STDDEV" value={fmt(gm.stddev, 2)} />
+            <Stat label="RANGE" value={range != null ? fmt(range, 2) : '—'} />
+            <Stat label="# MODELS" value={gm.valid_model_count ?? '—'} />
+            <Stat label="MODEL PLAY?" value={gm.suggested_play ? 'Yes' : 'No'} color={gm.suggested_play ? C.agree : C.dim} />
+          </div>
+        ) : <div style={{ ...FM, fontSize: 12, color: C.dim }}>No MSS data for this game.</div>
+      )}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Legend modal — static, values pulled directly from lib/pss-engine.js and
+// app/api/compute/route.js rather than approximated.
+// ---------------------------------------------------------------------------
+function LegendModal({ onClose }) {
+  const Section = ({ title, color, children }) => (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ ...FH, fontSize: 13, color, marginBottom: 8 }}>{title}</div>
+      <div style={{ ...FM, fontSize: 12, color: C.sub, lineHeight: 1.7 }}>{children}</div>
+    </div>
+  );
+  return (
+    <Modal title="How to read the board" onClose={onClose} wide>
+      <Section title="PSS (BobbyPSSModel) — primary signal" color={C.pss}>
+        <p><b style={{ color: C.text }}>PSS score (0–100):</b> 30% Edge + 25% MSS + 20% Agreement + 15% Dispersion(StdDev) + 10% Historical Tier.</p>
+        <p><b style={{ color: C.text }}>Bins:</b> {PSS_BIN_ORDER.join(' → ')}, high to low.</p>
+        <p><b style={{ color: C.text }}>Top-K tier:</b> Top-3 = Conviction, Top-5 = Confirmation, Top-7 = Consensus — the cascade tries 3 first and falls back to 5, then 7.</p>
+        <p><b style={{ color: C.text }}>Decision:</b> BET (PSS ≥82) · CONSIDER (74–81.9) · WATCH (66–73.9) · PASS (&lt;66). A BET can downgrade to REVIEW if the market has moved against the model and edge retention has dropped below 50%.</p>
+        <p><b style={{ color: C.text }}>Hard vetoes</b> force PASS regardless of score: StdDev &gt; 6, Agreement &lt; 70%, or |Edge| &lt; 2.</p>
+      </Section>
+      <Section title="BobbyModel (MSS) — secondary, supporting signal" color={C.mss}>
+        <p><b style={{ color: C.text }}>Confidence bins:</b> {MSS_BIN_ORDER.join(' → ')}.</p>
+        <p><b style={{ color: C.text }}>MODEL PLAY badge:</b> backtested qualification filter — Edge ≥1.5, StdDev ≤2.5, Agreement ≥85%.</p>
+      </Section>
+      <Section title="Shared terms" color={C.text}>
+        <p><b style={{ color: C.text }}>Edge:</b> model spread minus the current market line.</p>
+        <p><b style={{ color: C.text }}>Agreement:</b> share of the selected model pool favoring the same side as the edge.</p>
+        <p><b style={{ color: C.text }}>StdDev:</b> spread in predictions across the selected models — lower means tighter consensus.</p>
+      </Section>
+      <Section title="Fastest way to find the best plays" color={C.agree}>
+        <p>Sort by PSS rank (default). Look for <b style={{ color: C.text }}>BET</b>-decision games where the agreement banner shows the two models converged.</p>
+      </Section>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Season stats modal — reuses the exact query pattern /bobby-results uses.
+// Record/ATS% only; there's no units figure at the model-grading level.
+// ---------------------------------------------------------------------------
+function SeasonStatsModal({ season, week, onClose }) {
+  const [tab, setTab] = useState('pss');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [data, setData] = useState({ pss: null, mss: null });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        // MSS: game_metrics has no season/week of its own — look games up first.
+        const games = await sbFetch(`games?select=id&season=eq.${season}&week=lte.${week}`);
+        const idList = games.length ? `(${games.map((g) => g.id).join(',')})` : '(00000000-0000-0000-0000-000000000000)';
+        const mssMetrics = await sbFetch(`game_metrics?select=id,confidence_bin,suggested_play,pick_grades(ats_result)&game_id=in.${idList}`);
+        const mssGraded = mssMetrics.map((m) => ({ ...m, pg: Array.isArray(m.pick_grades) ? m.pick_grades[0] : m.pick_grades })).filter((m) => m.pg);
+
+        // PSS: pss_game_metrics carries season/week directly.
+        const pssMetrics = await sbFetch(`pss_game_metrics?select=id,pss_bin,qualifies,pss_pick_grades(ats_result)&season=eq.${season}&week=lte.${week}`);
+        const pssGraded = pssMetrics.map((m) => ({ ...m, pg: Array.isArray(m.pss_pick_grades) ? m.pss_pick_grades[0] : m.pss_pick_grades })).filter((m) => m.pg);
+
+        if (cancelled) return;
+        setData({
+          mss: {
+            overall: tally(mssGraded.filter((m) => m.suggested_play).map((m) => m.pg.ats_result)),
+            rows: bucketBy(mssGraded, (m) => m.confidence_bin || 'Very Weak', MSS_BIN_ORDER),
+          },
+          pss: {
+            overall: tally(pssGraded.filter((m) => m.qualifies).map((m) => m.pg.ats_result)),
+            rows: bucketBy(pssGraded, (m) => m.pss_bin || 'No Play', PSS_BIN_ORDER),
+          },
+        });
+      } catch (e) {
+        if (!cancelled) setError(String(e.message || e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [season, week]);
+
+  const d = data[tab];
+  return (
+    <Modal title="Season stats" onClose={onClose} wide>
+      <ModalTabs tab={tab} setTab={setTab} tabs={[['pss', 'PSS Stats', C.pss], ['mss', 'MSS Stats', C.mss]]} />
+      {loading && <div style={{ ...FM, fontSize: 12, color: C.sub }}>Loading…</div>}
+      {error && <div style={{ ...FM, fontSize: 12, color: C.warn }}>{error}</div>}
+      {!loading && !error && d && (
+        <>
+          <div style={{ display: 'flex', gap: 28, marginBottom: 20 }}>
+            <Stat label="QUALIFIED PLAYS RECORD" value={recordStr(d.overall)} size={18} />
+            <Stat label="ATS %" value={pctStr(d.overall)} size={18} color={C.agree} />
+          </div>
+          <div style={{ ...FH, fontSize: 11, color: C.sub, marginBottom: 8 }}>BY {tab === 'pss' ? 'BIN' : 'CONFIDENCE'} (all graded games, not just qualified)</div>
+          {d.rows.map((r) => (
+            <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${C.border}`, ...FM, fontSize: 12 }}>
+              <span style={{ color: C.text, width: 120 }}>{r.label}</span>
+              <span style={{ color: C.sub, width: 80 }}>{recordStr(r.record)}</span>
+              <span style={{ color: C.text }}>{pctStr(r.record)}</span>
+            </div>
+          ))}
+        </>
+      )}
+    </Modal>
+  );
+}
+function tally(results) {
+  return results.reduce((acc, r) => {
+    if (r === 'win') acc.wins++;
+    else if (r === 'loss') acc.losses++;
+    else if (r === 'push') acc.pushes++;
+    return acc;
+  }, { wins: 0, losses: 0, pushes: 0 });
+}
+function recordStr(record) {
+  return `${record.wins}-${record.losses}${record.pushes ? `-${record.pushes}` : ''}`;
+}
+function pctStr(record) {
+  const decided = record.wins + record.losses;
+  if (decided === 0) return '—';
+  return `${((record.wins / decided) * 100).toFixed(1)}%`;
+}
+function bucketBy(graded, keyFn, order) {
+  const map = new Map();
+  for (const m of graded) {
+    const k = keyFn(m);
+    const row = map.get(k) || { label: k, results: [] };
+    row.results.push(m.pg.ats_result);
+    map.set(k, row);
+  }
+  return Array.from(map.values()).map((r) => ({ label: r.label, record: tally(r.results) })).sort((a, b) => order.indexOf(a.label) - order.indexOf(b.label));
+}
+
+// ---------------------------------------------------------------------------
+// My Card modal — this week's picks, straight from already-loaded state.
+// ---------------------------------------------------------------------------
+function MyCardModal({ rows, picksByGame, onClose }) {
+  const withPicks = rows.filter((r) => {
+    const p = picksByGame[r.game.id];
+    return p && (p.plays.length > 0 || p.lean);
+  });
+  const totalUnits = withPicks.flatMap((r) => picksByGame[r.game.id].plays).reduce((s, p) => s + parseFloat(p.units || 0), 0);
+  return (
+    <Modal title="My card — this week" onClose={onClose} wide>
+      <div style={{ ...FM, fontSize: 12, color: C.sub, marginBottom: 16 }}>{withPicks.length} games · {totalUnits.toFixed(1)}u total exposure</div>
+      {withPicks.length === 0 && <div style={{ ...FM, fontSize: 12, color: C.sub }}>No plays or leans logged yet — add one from any game card.</div>}
+      {withPicks.map((r) => {
+        const p = picksByGame[r.game.id];
+        const home = r.game.home_team, away = r.game.away_team;
+        return (
+          <div key={r.game.id} style={{ padding: '10px 0', borderBottom: `1px solid ${C.border}` }}>
+            <div style={{ ...FH, fontSize: 13, color: C.text, marginBottom: 6 }}>{away} @ {home}</div>
+            {p.lean && <div style={{ ...FM, fontSize: 12, color: C.pss, marginBottom: 3 }}>Lean: {p.lean.side === 'home' ? home : away}</div>}
+            {p.plays.map((pk) => (
+              <div key={pk.id} style={{ ...FM, fontSize: 12, color: C.sub, display: 'flex', gap: 10 }}>
+                <span style={{ color: C.agree }}>{pk.units}u</span>
+                <span style={{ color: C.text }}>
+                  {pk.pick_type === 'spread' ? `${pk.side === 'home' ? home : away} ATS` : pk.pick_type === 'total' ? `${pk.side === 'over' ? 'Over' : 'Under'} ${fmt(r.game.over_under, 1)}` : `${pk.side === 'home' ? home : away} ML`}
+                </span>
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Game card
 // ---------------------------------------------------------------------------
-function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, notesDraft, onSetLean, onSetNotesDraft, onCommitNotes, onAddPlay, onRemovePlay, researchTags, onAddResearchTag, onRemoveResearchTag }) {
+function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, notesDraft, onSetLean, onSetNotesDraft, onCommitNotes, onAddPlay, onRemovePlay, researchTags, onAddResearchTag, onRemoveResearchTag, onOpenDrilldown }) {
   const { game, gm, pm } = row;
   const home = game.home_team, away = game.away_team;
   const mp = mssPick(gm, home, away);
@@ -215,9 +478,16 @@ function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, not
         <div style={{ borderTop: `1px solid ${C.border}` }}>
           {/* PSS panel — primary */}
           <div style={{ padding: '16px 18px', borderBottom: `1px solid ${C.border}`, background: `${C.pss}08` }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.pss }} />
-              <span style={{ ...FH, fontSize: 14, color: C.pss }}>BobbyPSS — primary model</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.pss }} />
+                <span style={{ ...FH, fontSize: 14, color: C.pss }}>BobbyPSS — primary model</span>
+              </div>
+              {(pm || gm) && (
+                <button onClick={() => onOpenDrilldown(row)} style={{ ...FM, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: `1px solid ${C.border}`, borderRadius: 3, padding: '4px 9px', color: C.sub, cursor: 'pointer' }}>
+                  ⤢ Full breakdown
+                </button>
+              )}
             </div>
             {pm ? (
               <>
@@ -249,6 +519,7 @@ function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, not
                 <span style={{ ...FM, fontSize: 11.5, color: C.sub }}>Agree {gm.agreement != null ? `${Math.round(gm.agreement * 100)}%` : '—'}</span>
                 <span style={{ ...FM, fontSize: 11.5, color: C.sub }}>StdDev {fmt(gm.stddev, 2)}</span>
                 {gm.suggested_play && <Badge color={C.mss} filled>MODEL PLAY</Badge>}
+                <button onClick={() => onOpenDrilldown(row)} style={{ ...FM, fontSize: 10.5, background: 'none', border: 'none', color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>details</button>
               </div>
             ) : (
               <div style={{ ...FM, fontSize: 12, color: C.dim }}>No MSS data for this game.</div>
@@ -369,6 +640,16 @@ export default function Dashboard() {
   // Text currently in each note input, separate from the committed row so
   // typing doesn't fire a request per keystroke — committed onBlur.
   const [notesDraftByGame, setNotesDraftByGame] = useState({});
+  // MSS "range" and "agreement across all models" aren't stored columns —
+  // both are derived from raw_predictions, same computation /mss-dashboard
+  // already does. Computed once per week load, looked up by game id in the
+  // drilldown modal rather than the main card (keeps the card itself light).
+  const [rangeByGame, setRangeByGame] = useState({});
+  const [agreementAllByGame, setAgreementAllByGame] = useState({});
+  const [drilldownRow, setDrilldownRow] = useState(null);
+  const [showLegend, setShowLegend] = useState(false);
+  const [showStats, setShowStats] = useState(false);
+  const [showCard, setShowCard] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -385,8 +666,8 @@ export default function Dashboard() {
         const [games, logoRows] = await Promise.all([
           sbFetch(
             `games?select=id,home_team,away_team,kickoff_at,current_line,opening_line,over_under,tv_network,status,` +
-            `game_metrics(edge,agreement,stddev,mss,confidence_bin,suggested_play,suggested_side,suggested_line,consensus_spread,valid_model_count),` +
-            `pss_game_metrics(pss,pss_bin,decision,qualifies,qualifying_tier,signal_type,selected_k,agreement,stddev,edge,consensus_spread,suggested_side,suggested_line,pss_drivers,warnings)` +
+            `game_metrics(edge,agreement,stddev,mss,confidence_bin,suggested_play,suggested_side,suggested_line,consensus_spread,valid_model_count,topk_model_ids),` +
+            `pss_game_metrics(pss,pss_bin,decision,qualifies,qualifying_tier,signal_type,selected_k,agreement,stddev,edge,consensus_spread,suggested_side,suggested_line,pss_drivers,warnings,mss_score,market_alignment,historical_tier)` +
             `&season=eq.${season}&week=eq.${week}`
           ),
           sbFetch(`team_logos?select=team_name,logo_url`),
@@ -401,6 +682,50 @@ export default function Dashboard() {
         }));
         setRows(built);
         setLogos(logoMap);
+
+        // Range (max-min across the Top-K pool) and full-pool agreement,
+        // computed the same way /mss-dashboard does — restricted to each
+        // game's own topk_model_ids, not just this game's edge sign.
+        if (games.length > 0) {
+          const ids = games.map((g) => g.id).join(',');
+          try {
+            const preds = await sbFetch(`raw_predictions?select=game_id,model_id,predicted_margin&game_id=in.(${ids})`);
+            if (cancelled) return;
+            const byGamePreds = {};
+            for (const p of preds) {
+              if (!byGamePreds[p.game_id]) byGamePreds[p.game_id] = [];
+              byGamePreds[p.game_id].push(p);
+            }
+            const rangeMap = {}, agreeAllMap = {};
+            for (const r of built) {
+              const gm = r.gm;
+              const topk = gm?.topk_model_ids || [];
+              const gamePreds = byGamePreds[r.game.id] || [];
+              const topkPreds = gamePreds.filter((p) => topk.includes(p.model_id)).map((p) => parseFloat(p.predicted_margin));
+              if (topkPreds.length >= 2) rangeMap[r.game.id] = Math.max(...topkPreds) - Math.min(...topkPreds);
+
+              const vegasLine = r.game.current_line != null ? parseFloat(r.game.current_line) : null;
+              const edgeVal = gm?.edge != null ? parseFloat(gm.edge) : null;
+              if (vegasLine != null && edgeVal != null && gamePreds.length > 0) {
+                const edgePositive = edgeVal > 0;
+                let agreeCount = 0;
+                for (const p of gamePreds) {
+                  const margin = parseFloat(p.predicted_margin);
+                  if (Number.isNaN(margin)) continue;
+                  if ((margin > vegasLine) === edgePositive) agreeCount++;
+                }
+                agreeAllMap[r.game.id] = { count: agreeCount, total: gamePreds.length, pct: (agreeCount / gamePreds.length) * 100 };
+              }
+            }
+            setRangeByGame(rangeMap);
+            setAgreementAllByGame(agreeAllMap);
+          } catch (e) {
+            console.error('Failed to load raw predictions for range/agreement-all:', e);
+          }
+        } else {
+          setRangeByGame({});
+          setAgreementAllByGame({});
+        }
 
         // Load this week's picks in a second pass, once we have game ids —
         // failure here shouldn't block the board itself from rendering.
@@ -589,6 +914,18 @@ export default function Dashboard() {
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap'); select option { background: ${C.surface}; }`}</style>
 
       <div style={{ maxWidth: 980, margin: '0 auto' }}>
+        {drilldownRow && (
+          <DrilldownModal
+            row={drilldownRow}
+            range={rangeByGame[drilldownRow.game.id]}
+            agreementAll={agreementAllByGame[drilldownRow.game.id]}
+            onClose={() => setDrilldownRow(null)}
+          />
+        )}
+        {showLegend && <LegendModal onClose={() => setShowLegend(false)} />}
+        {showStats && <SeasonStatsModal season={season} week={week} onClose={() => setShowStats(false)} />}
+        {showCard && <MyCardModal rows={rows} picksByGame={picksByGame} onClose={() => setShowCard(false)} />}
+
         {/* Top bar */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18, flexWrap: 'wrap', gap: 12 }}>
           <div>
@@ -600,6 +937,11 @@ export default function Dashboard() {
               <input type="number" value={week ?? ''} onChange={(e) => setWeek(parseInt(e.target.value) || week)} style={{ ...selectStyle, width: 50 }} />
               <span>· sorted by PSS rank</span>
             </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={() => setShowLegend(true)} style={{ ...FM, fontSize: 11.5, padding: '7px 12px', borderRadius: 4, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer' }}>? Legend</button>
+            <button onClick={() => setShowStats(true)} style={{ ...FM, fontSize: 11.5, padding: '7px 12px', borderRadius: 4, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer' }}>📊 Season stats</button>
+            <button onClick={() => setShowCard(true)} style={{ ...FM, fontSize: 11.5, padding: '7px 12px', borderRadius: 4, border: `1px solid ${C.pss}`, background: `${C.pss}1A`, color: C.pss, cursor: 'pointer' }}>🎯 My card</button>
           </div>
         </div>
 
@@ -654,6 +996,7 @@ export default function Dashboard() {
                 onSetLean={setLean} onSetNotesDraft={setNotesDraft} onCommitNotes={commitNotes}
                 onAddPlay={addPlay} onRemovePlay={removePlay}
                 researchTags={researchByGame[r.game.id]} onAddResearchTag={addResearchTag} onRemoveResearchTag={removeResearchTag}
+                onOpenDrilldown={setDrilldownRow}
               />
             ))}
             {filtered.length === 0 && <div style={{ ...FM, fontSize: 12, color: C.sub, padding: '20px 0' }}>No games match these filters.</div>}
