@@ -100,7 +100,7 @@ function TeamMark({ logoUrl, name }) {
 // ---------------------------------------------------------------------------
 // Game card
 // ---------------------------------------------------------------------------
-function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, localState, onLocalChange }) {
+function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, notesDraft, onSetLean, onSetNotesDraft, onCommitNotes, onAddPlay, onRemovePlay }) {
   const { game, gm, pm } = row;
   const home = game.home_team, away = game.away_team;
   const mp = mssPick(gm, home, away);
@@ -112,6 +112,10 @@ function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, localState
   const [playType, setPlayType] = useState('spread');
   const [playSide, setPlaySide] = useState('home');
   const [playUnits, setPlayUnits] = useState(1);
+  const [saving, setSaving] = useState(false);
+
+  const leanSide = picks?.lean?.side ?? null;
+  const plays = picks?.plays ?? [];
 
   return (
     <div style={{
@@ -221,32 +225,33 @@ function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, localState
             </div>
           )}
 
-          {/* Lean / play / notes — local preview only, persistence lands in PR4 */}
+          {/* Lean / play / notes — persisted to my_picks */}
           <div style={{ padding: '12px 18px' }}>
-            <div style={{ ...FM, fontSize: 9.5, color: C.dim, marginBottom: 8 }}>Lean/play/notes below are a preview only — saving to your card lands in PR4.</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginBottom: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span style={{ ...FH, fontSize: 10.5, color: C.sub }}>LEAN</span>
                 {['away', 'home'].map((side) => (
-                  <button key={side} onClick={() => onLocalChange({ ...localState, lean: localState.lean === side ? null : side })} style={{
-                    ...FM, fontSize: 11, padding: '4px 10px', borderRadius: 3, cursor: 'pointer',
-                    border: `1px solid ${localState.lean === side ? C.pss : C.border}`,
-                    background: localState.lean === side ? `${C.pss}1F` : 'transparent',
-                    color: localState.lean === side ? C.pss : C.sub,
+                  <button key={side} disabled={saving} onClick={async () => { setSaving(true); try { await onSetLean(game.id, side); } finally { setSaving(false); } }} style={{
+                    ...FM, fontSize: 11, padding: '4px 10px', borderRadius: 3, cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1,
+                    border: `1px solid ${leanSide === side ? C.pss : C.border}`,
+                    background: leanSide === side ? `${C.pss}1F` : 'transparent',
+                    color: leanSide === side ? C.pss : C.sub,
                   }}>{side === 'home' ? home : away}</button>
                 ))}
               </div>
-              <input placeholder="Add a note…" value={localState.notes} onChange={(e) => onLocalChange({ ...localState, notes: e.target.value })}
+              <input placeholder="Add a note…" value={notesDraft ?? ''}
+                onChange={(e) => onSetNotesDraft(game.id, e.target.value)}
+                onBlur={(e) => onCommitNotes(game.id, e.target.value)}
                 style={{ ...FM, fontSize: 11, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, padding: '5px 10px', color: C.text, flex: 1, minWidth: 160, outline: 'none' }} />
             </div>
 
-            {localState.plays.map((p, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0' }}>
+            {plays.map((p) => (
+              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0' }}>
                 <span style={{ color: C.agree }}>●</span>
                 <span style={{ ...FM, fontSize: 12, color: C.text }}>
-                  {p.units}u — {p.type === 'spread' ? `${p.side === 'home' ? home : away} ATS` : p.type === 'total' ? `${p.side === 'over' ? 'Over' : 'Under'} ${fmt(game.over_under, 1)}` : `${p.side === 'home' ? home : away} ML`}
+                  {p.units}u — {p.pick_type === 'spread' ? `${p.side === 'home' ? home : away} ATS` : p.pick_type === 'total' ? `${p.side === 'over' ? 'Over' : 'Under'} ${fmt(game.over_under, 1)}` : `${p.side === 'home' ? home : away} ML`}
                 </span>
-                <button onClick={() => onLocalChange({ ...localState, plays: localState.plays.filter((_, idx) => idx !== i) })} style={{ background: 'none', border: 'none', color: C.dim, cursor: 'pointer' }}>✕</button>
+                <button onClick={() => onRemovePlay(game.id, p.id)} style={{ background: 'none', border: 'none', color: C.dim, cursor: 'pointer' }}>✕</button>
               </div>
             ))}
 
@@ -263,7 +268,7 @@ function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, localState
               </select>
               <input type="number" step="0.5" value={playUnits} onChange={(e) => setPlayUnits(parseFloat(e.target.value))}
                 style={{ ...FM, fontSize: 11, width: 54, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, padding: '5px 6px', color: C.text }} />
-              <button onClick={() => onLocalChange({ ...localState, plays: [...localState.plays, { type: playType, side: playSide, units: playUnits }] })} style={{ ...FM, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 3, border: `1px solid ${C.agree}`, background: `${C.agree}1A`, color: C.agree, cursor: 'pointer' }}>
+              <button disabled={saving} onClick={async () => { setSaving(true); try { await onAddPlay(game.id, playType, playSide, playUnits); } finally { setSaving(false); } }} style={{ ...FM, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 3, border: `1px solid ${C.agree}`, background: `${C.agree}1A`, color: C.agree, cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1 }}>
                 + Add pick
               </button>
             </div>
@@ -292,10 +297,14 @@ export default function Dashboard() {
   const [sortBy, setSortBy] = useState('pss');
   const [sortDir, setSortDir] = useState('desc');
 
-  // Local-only lean/play/notes state, keyed by game id. Not persisted — PR4.
-  const [localByGame, setLocalByGame] = useState({});
-  const getLocal = (id) => localByGame[id] || { lean: null, plays: [], notes: '' };
-  const setLocal = (id, val) => setLocalByGame((prev) => ({ ...prev, [id]: val }));
+  // Persisted picks (my_picks), keyed by game id: { lean: row|null, note: row|null, plays: [row] }.
+  // A per-game note and a lean are each stored as a single distinguishing
+  // row (pick_type='note', or status='lean') rather than a separate table —
+  // see PR4 handoff notes for why.
+  const [picksByGame, setPicksByGame] = useState({});
+  // Text currently in each note input, separate from the committed row so
+  // typing doesn't fire a request per keystroke — committed onBlur.
+  const [notesDraftByGame, setNotesDraftByGame] = useState({});
 
   useEffect(() => {
     let cancelled = false;
@@ -328,6 +337,32 @@ export default function Dashboard() {
         }));
         setRows(built);
         setLogos(logoMap);
+
+        // Load this week's picks in a second pass, once we have game ids —
+        // failure here shouldn't block the board itself from rendering.
+        if (games.length > 0) {
+          const ids = games.map((g) => g.id).join(',');
+          try {
+            const picks = await sbFetch(`my_picks?select=*&game_id=in.(${ids})&order=created_at.asc`);
+            if (cancelled) return;
+            const grouped = {};
+            for (const p of picks) {
+              if (!grouped[p.game_id]) grouped[p.game_id] = { lean: null, note: null, plays: [] };
+              if (p.status === 'lean') grouped[p.game_id].lean = p;
+              else if (p.pick_type === 'note') grouped[p.game_id].note = p;
+              else grouped[p.game_id].plays.push(p);
+            }
+            setPicksByGame(grouped);
+            const drafts = {};
+            for (const gid of Object.keys(grouped)) drafts[gid] = grouped[gid].note?.note ?? '';
+            setNotesDraftByGame(drafts);
+          } catch (e) {
+            console.error('Failed to load picks:', e);
+          }
+        } else {
+          setPicksByGame({});
+          setNotesDraftByGame({});
+        }
       } catch (e) {
         if (!cancelled) setError(String(e.message || e));
       } finally {
@@ -338,6 +373,75 @@ export default function Dashboard() {
   }, [season, week]);
 
   const toggle = (id) => setExpandedIds((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  // --- my_picks CRUD ---------------------------------------------------
+  // Lean: at most one per game, stored as status='lean'. Clicking the
+  // already-selected side toggles it off; clicking the other side moves it.
+  async function setLean(gameId, side) {
+    const current = picksByGame[gameId]?.lean;
+    if (current && current.side === side) {
+      await sbFetch(`my_picks?id=eq.${current.id}`, { method: 'DELETE' });
+      setPicksByGame((prev) => ({ ...prev, [gameId]: { ...(prev[gameId] || { note: null, plays: [] }), lean: null } }));
+      return;
+    }
+    if (current) {
+      const [updated] = await sbFetch(`my_picks?id=eq.${current.id}`, {
+        method: 'PATCH', body: JSON.stringify({ side, updated_at: new Date().toISOString() }),
+      });
+      setPicksByGame((prev) => ({ ...prev, [gameId]: { ...prev[gameId], lean: updated } }));
+    } else {
+      const [created] = await sbFetch(`my_picks`, {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, season, week, pick_type: 'spread', side, status: 'lean', units: 0 }),
+      });
+      setPicksByGame((prev) => ({ ...prev, [gameId]: { ...(prev[gameId] || { note: null, plays: [] }), lean: created } }));
+    }
+  }
+
+  function setNotesDraft(gameId, text) {
+    setNotesDraftByGame((prev) => ({ ...prev, [gameId]: text }));
+  }
+
+  // Note: at most one per game, stored as pick_type='note'. Committed on
+  // blur rather than on every keystroke. Empty text deletes the row.
+  async function commitNotes(gameId, text) {
+    const current = picksByGame[gameId]?.note;
+    if (!text.trim()) {
+      if (current) {
+        await sbFetch(`my_picks?id=eq.${current.id}`, { method: 'DELETE' });
+        setPicksByGame((prev) => ({ ...prev, [gameId]: { ...prev[gameId], note: null } }));
+      }
+      return;
+    }
+    if (current) {
+      const [updated] = await sbFetch(`my_picks?id=eq.${current.id}`, {
+        method: 'PATCH', body: JSON.stringify({ note: text, updated_at: new Date().toISOString() }),
+      });
+      setPicksByGame((prev) => ({ ...prev, [gameId]: { ...prev[gameId], note: updated } }));
+    } else {
+      const [created] = await sbFetch(`my_picks`, {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, season, week, pick_type: 'note', units: 0, status: 'official', note: text }),
+      });
+      setPicksByGame((prev) => ({ ...prev, [gameId]: { ...(prev[gameId] || { lean: null, plays: [] }), note: created } }));
+    }
+  }
+
+  // Plays: any number per game, each its own row.
+  async function addPlay(gameId, type, side, units) {
+    const [created] = await sbFetch(`my_picks`, {
+      method: 'POST',
+      body: JSON.stringify({ game_id: gameId, season, week, pick_type: type, side, units, status: 'official' }),
+    });
+    setPicksByGame((prev) => ({
+      ...prev,
+      [gameId]: { ...(prev[gameId] || { lean: null, note: null, plays: [] }), plays: [...(prev[gameId]?.plays || []), created] },
+    }));
+  }
+  async function removePlay(gameId, pickId) {
+    await sbFetch(`my_picks?id=eq.${pickId}`, { method: 'DELETE' });
+    setPicksByGame((prev) => ({ ...prev, [gameId]: { ...prev[gameId], plays: prev[gameId].plays.filter((p) => p.id !== pickId) } }));
+  }
 
   // Ranks computed off the full fetched set, independent of filtering.
   const pssRanked = useMemo(() => [...rows].filter((r) => r.pm).sort((a, b) => b.pm.pss - a.pm.pss), [rows]);
@@ -355,8 +459,8 @@ export default function Dashboard() {
         if (!mp || !pp || mp.side !== pp.side) return false;
       }
       if (filter === 'mine') {
-        const l = getLocal(r.game.id);
-        if (!l.lean && l.plays.length === 0) return false;
+        const p = picksByGame[r.game.id];
+        if (!p?.lean && !(p?.plays?.length > 0)) return false;
       }
       if (mssBinFilter !== 'any' && r.gm?.confidence_bin !== mssBinFilter) return false;
       if (pssBinFilter !== 'any' && r.pm?.pss_bin !== pssBinFilter) return false;
@@ -372,7 +476,7 @@ export default function Dashboard() {
     });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, filter, mssBinFilter, pssBinFilter, sortBy, sortDir, localByGame]);
+  }, [rows, filter, mssBinFilter, pssBinFilter, sortBy, sortDir, picksByGame]);
 
   const agreeCount = rows.filter((r) => {
     const mp = mssPick(r.gm, r.game.home_team, r.game.away_team);
@@ -450,7 +554,9 @@ export default function Dashboard() {
               <GameCard
                 key={r.game.id} row={r} expanded={expandedIds.has(r.game.id)} onToggle={() => toggle(r.game.id)}
                 pssRank={pssRankMap[r.game.id]} mssRank={mssRankMap[r.game.id]} logos={logos}
-                localState={getLocal(r.game.id)} onLocalChange={(val) => setLocal(r.game.id, val)}
+                picks={picksByGame[r.game.id]} notesDraft={notesDraftByGame[r.game.id]}
+                onSetLean={setLean} onSetNotesDraft={setNotesDraft} onCommitNotes={commitNotes}
+                onAddPlay={addPlay} onRemovePlay={removePlay}
               />
             ))}
             {filtered.length === 0 && <div style={{ ...FM, fontSize: 12, color: C.sub, padding: '20px 0' }}>No games match these filters.</div>}
