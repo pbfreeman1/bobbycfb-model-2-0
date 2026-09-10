@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { getCurrentWeek } from '../../lib/supabase';
 
 const SUPABASE_URL = 'https://zpmdrazbqgzheqkvfltv.supabase.co';
 const SUPABASE_ANON_KEY =
@@ -668,7 +667,15 @@ export default function PSSDashboard() {
 
   useEffect(() => {
     let cancelled = false;
-    getCurrentWeek(season).then((w) => { if (!cancelled) setWeek(w); });
+    // Default to the latest week that has any games scheduled (not just final),
+    // so the board shows the current week's games as soon as they are seeded.
+    fetch(
+      `${SUPABASE_URL}/rest/v1/games?select=week&season=eq.${season}&order=week.desc&limit=1`,
+      { headers: SB_HEADERS }
+    )
+      .then((r) => r.json())
+      .then((rows) => { if (!cancelled) setWeek(rows.length ? rows[0].week : 1); })
+      .catch(() => { if (!cancelled) setWeek(1); });
     return () => { cancelled = true; };
   }, [season]);
 

@@ -1,7 +1,13 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { sbFetch, getCurrentWeek, fmt, fmtKickoff } from '../lib/supabase';
+import { sbFetch, getCurrentWeek, fmt, fmtKickoff, SUPABASE_URL, SUPABASE_ANON_KEY } from '../lib/supabase';
+
+const SB_HEADERS = {
+  apikey: SUPABASE_ANON_KEY,
+  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+  'Content-Type': 'application/json',
+};
 
 const FH = { fontFamily: "'Space Grotesk', 'Segoe UI', sans-serif" };
 const FM = { fontFamily: "'IBM Plex Mono', 'Courier New', monospace" };
@@ -165,68 +171,141 @@ function ModalTabs({ tab, setTab, tabs }) {
 }
 
 // ---------------------------------------------------------------------------
-// Per-model prediction breakdown — shared by both PSS Detail and MSS Detail
-// tabs. Shows each top-K model's raw predicted margin and which side it
-// implies, so you can see exactly which systems are driving the consensus.
+// Per-model prediction breakdown — fetches raw_predictions live for the
+// top-K model IDs stored in game_metrics.topk_model_ids, then renders
+// the PSS component breakdown table + individual model predictions table,
+// matching the DetailPanel layout on the PSS dashboard page.
 // ---------------------------------------------------------------------------
 function ModelBreakdownTable({ row }) {
   const { game, gm, pm } = row;
   const home = game.home_team, away = game.away_team;
   const vegasLine = parseFloat(gm?.vegas_line ?? pm?.vegas_line ?? 0);
+  const topkIds = gm?.topk_model_ids || pm?.topk_model_ids || [];
 
-  // Collect model predictions from raw_predictions via the already-loaded row.
-  // The dashboard loads raw_predictions for each game into row.preds (an array
-  // of { model_id, system_name, predicted_margin }). If that field is missing
-  // (older data shape), we show a graceful empty state.
-  const preds = row.preds || [];
-  const topkIds = new Set(gm?.topk_model_ids || pm?.topk_model_ids || []);
+  const [models, setModels] = useState(null);
 
-  // If we have topk_model_ids, show only those; otherwise show all preds we have.
-  const display = topkIds.size > 0
-    ? preds.filter((p) => topkIds.has(p.model_id))
-    : preds;
+  useEffect(() => {
+    if (!topkIds.length) { setModels([]); return; }
+    let cancelled = false;
+    const idList = topkIds.join(',');
+    fetch(
+      `${SUPABASE_URL}/rest/v1/raw_predictions?select=model_id,predicted_margin,source_models(system_name)&game_id=eq.${game.id}&model_id=in.(${idList})`,
+      { headers: SB_HEADERS }
+    )
+      .then((r) => r.json())
+      .then((data) => { if (!cancelled) setModels(data); })
+      .catch(() => { if (!cancelled) setModels([]); });
+    return () => { cancelled = true; };
+  }, [game.id]);
 
-  // Sort by model rank if available, otherwise by predicted_margin desc
-  display.sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
+  const modelStats = useMemo(() => {
+    if (!models || !models.length) return null;
+    const vals = models.map((m) => parseFloat(m.predicted_margin)).filter((v) => !Number.isNaN(v));
+    if (!vals.length) return null;
+    const sorted = [...vals].sort((a, b) => a - b);
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    const mid = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    const variance = vals.reduce((a, v) => a + Math.pow(v - mean, 2), 0) / vals.length;
+    return { mean, median, std: Math.sqrt(variance), range: sorted[sorted.length - 1] - sorted[0] };
+  }, [models]);
 
-  if (display.length === 0) {
-    return (
-      <div>
-        <div style={{ ...FH, fontSize: 11, color: C.sub, marginBottom: 6 }}>MODEL BREAKDOWN (TOP-K)</div>
-        <div style={{ ...FM, fontSize: 11, color: C.dim }}>No per-model prediction data loaded for this game.</div>
-      </div>
-    );
-  }
+  // PSS component breakdown rows (mirrors PSS DetailPanel section B)
+  const pssComponents = pm ? [
+    { label: 'Edge',       actual: pm.edge != null ? (pm.edge > 0 ? `+${pm.edge.toFixed(1)}` : pm.edge.toFixed(1)) : '—', score: pm.edge_score,      weight: 30 },
+    { label: 'MSS',        actual: pm.mss_score != null ? pm.mss_score.toFixed(1) : '—',                                   score: pm.mss_score,       weight: 25 },
+    { label: 'Agreement',  actual: pm.agreement_count != null ? `${pm.agreement_count}/${pm.agreement_k}` : (pm.agreement != null ? `${Math.round(pm.agreement * 100)}%` : '—'), score: pm.agreement_score, weight: 20 },
+    { label: 'STD',        actual: pm.stddev != null ? pm.stddev.toFixed(2) : '—',                                         score: pm.stddev_score,    weight: 15 },
+    { label: 'Historical', actual: pm.historical_tier || '—',                                                               score: pm.historical_score, weight: 10 },
+  ] : null;
+  const pssTotal = pssComponents ? pssComponents.reduce((a, c) => a + ((c.score || 0) * c.weight) / 100, 0) : null;
+
+  const thStyle = { ...FM, fontSize: 10, color: C.sub, padding: '6px 10px', background: C.surface2, letterSpacing: 0.3, textAlign: 'left', borderBottom: `1px solid ${C.border}` };
+  const tdStyle = { ...FM, fontSize: 11.5, padding: '7px 10px', borderBottom: `1px solid ${C.border}` };
 
   return (
-    <div>
-      <div style={{ ...FH, fontSize: 11, color: C.sub, marginBottom: 8 }}>MODEL BREAKDOWN (TOP-{display.length})</div>
-      <div style={{ border: `1px solid ${C.border}`, borderRadius: 4, overflow: 'hidden' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px 90px 80px', ...FM, fontSize: 10, color: C.sub, padding: '6px 10px', background: C.surface2, letterSpacing: 0.3 }}>
-          <span>SYSTEM</span><span>PREDICTED</span><span>EDGE</span><span>SIDE</span>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* PSS Component Breakdown — only shown when PSS data exists */}
+      {pssComponents && (
+        <div>
+          <div style={{ ...FH, fontSize: 11, color: C.sub, marginBottom: 8 }}>PSS COMPONENT BREAKDOWN</div>
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 4, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  {['COMPONENT', 'ACTUAL', 'SCORE', 'WEIGHT', 'CONTRIBUTION'].map((h) => (
+                    <th key={h} style={thStyle}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {pssComponents.map((c, i) => (
+                  <tr key={c.label} style={{ background: i % 2 === 0 ? 'transparent' : C.surface2 }}>
+                    <td style={{ ...tdStyle, color: C.text }}>{c.label}</td>
+                    <td style={{ ...tdStyle, color: C.sub }}>{c.actual}</td>
+                    <td style={{ ...tdStyle, color: C.text }}>{c.score != null ? Math.round(c.score) : '—'}</td>
+                    <td style={{ ...tdStyle, color: C.sub }}>{c.weight}%</td>
+                    <td style={{ ...tdStyle, color: C.pss }}>{c.score != null ? ((c.score * c.weight) / 100).toFixed(1) : '—'}</td>
+                  </tr>
+                ))}
+                <tr style={{ background: C.surface2 }}>
+                  <td colSpan={4} style={{ ...tdStyle, color: C.sub, fontWeight: 700 }}>TOTAL</td>
+                  <td style={{ ...tdStyle, color: C.pss, fontWeight: 700 }}>{pssTotal != null ? pssTotal.toFixed(1) : '—'}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
-        {display.map((p, i) => {
-          const pred = parseFloat(p.predicted_margin);
-          const edge = pred - vegasLine;
-          const side = edge >= 0 ? 'home' : 'away';
-          const sideTeam = side === 'home' ? home : away;
-          const sideColor = side === 'home' ? C.agree : C.pss;
-          return (
-            <div key={p.model_id} style={{
-              display: 'grid', gridTemplateColumns: '1fr 90px 90px 80px',
-              ...FM, fontSize: 11.5, padding: '7px 10px',
-              background: i % 2 === 0 ? 'transparent' : C.surface2,
-              borderTop: `1px solid ${C.border}`,
-            }}>
-              <span style={{ color: C.text }}>{p.system_name || p.model_id}</span>
-              <span style={{ color: C.sub }}>{pred > 0 ? `+${pred.toFixed(1)}` : pred.toFixed(1)}</span>
-              <span style={{ color: Math.abs(edge) >= 1.5 ? C.agree : C.sub }}>
-                {edge > 0 ? `+${edge.toFixed(1)}` : edge.toFixed(1)}
-              </span>
-              <span style={{ color: sideColor }}>{sideTeam.split(' ').slice(-1)[0]}</span>
+      )}
+
+      {/* Individual Model Predictions */}
+      <div>
+        <div style={{ ...FH, fontSize: 11, color: C.sub, marginBottom: 8 }}>
+          INDIVIDUAL MODEL PREDICTIONS ({models === null ? '…' : models.length})
+        </div>
+        {models === null ? (
+          <div style={{ ...FM, fontSize: 11, color: C.dim }}>Loading…</div>
+        ) : models.length === 0 ? (
+          <div style={{ ...FM, fontSize: 11, color: C.dim }}>No model predictions found for this game.</div>
+        ) : (
+          <>
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: 4, overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    {['MODEL', 'PREDICTED SPREAD', 'EDGE VS MARKET', 'SELECTED SIDE'].map((h) => (
+                      <th key={h} style={thStyle}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {models.map((m, i) => {
+                    const pred = parseFloat(m.predicted_margin);
+                    const edge = pred - vegasLine;
+                    const side = edge > 0 ? home : edge < 0 ? away : 'Even';
+                    const edgeColor = Math.abs(edge) >= 1.5 ? C.agree : C.sub;
+                    return (
+                      <tr key={m.model_id} style={{ background: i % 2 === 0 ? 'transparent' : C.surface2 }}>
+                        <td style={{ ...tdStyle, color: C.text }}>{m.source_models?.system_name || 'Unknown'}</td>
+                        <td style={{ ...tdStyle, color: C.sub }}>{pred > 0 ? `+${pred.toFixed(1)}` : pred.toFixed(1)}</td>
+                        <td style={{ ...tdStyle, color: edgeColor }}>{edge > 0 ? `+${edge.toFixed(1)}` : edge.toFixed(1)}</td>
+                        <td style={{ ...tdStyle, color: edge > 0 ? C.agree : C.pss }}>{side}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-          );
-        })}
+            {modelStats && (
+              <div style={{ ...FM, fontSize: 11, color: C.sub, marginTop: 8, display: 'flex', gap: 20 }}>
+                <span>Mean <b style={{ color: C.text }}>{modelStats.mean.toFixed(2)}</b></span>
+                <span>Median <b style={{ color: C.text }}>{modelStats.median.toFixed(2)}</b></span>
+                <span>STD <b style={{ color: C.text }}>{modelStats.std.toFixed(2)}</b></span>
+                <span>Range <b style={{ color: C.text }}>{modelStats.range.toFixed(2)}</b></span>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );
@@ -697,6 +776,7 @@ export default function Dashboard() {
   const [filter, setFilter] = useState('all');
   const [mssBinFilter, setMssBinFilter] = useState('any');
   const [pssBinFilter, setPssBinFilter] = useState('any');
+  const [teamSearch, setTeamSearch] = useState('');
   const [sortBy, setSortBy] = useState('pss');
   const [sortDir, setSortDir] = useState('desc');
 
@@ -959,6 +1039,10 @@ export default function Dashboard() {
       }
       if (mssBinFilter !== 'any' && r.gm?.confidence_bin !== mssBinFilter) return false;
       if (pssBinFilter !== 'any' && r.pm?.pss_bin !== pssBinFilter) return false;
+      if (teamSearch.trim()) {
+        const q = teamSearch.trim().toLowerCase();
+        if (!r.game.home_team.toLowerCase().includes(q) && !r.game.away_team.toLowerCase().includes(q)) return false;
+      }
       return true;
     });
     const dir = sortDir === 'desc' ? -1 : 1;
@@ -971,7 +1055,7 @@ export default function Dashboard() {
     });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, filter, mssBinFilter, pssBinFilter, sortBy, sortDir, picksByGame]);
+  }, [rows, filter, mssBinFilter, pssBinFilter, teamSearch, sortBy, sortDir, picksByGame]);
 
   const agreeCount = rows.filter((r) => {
     const mp = mssPick(r.gm, r.game.home_team, r.game.away_team);
@@ -1046,6 +1130,13 @@ export default function Dashboard() {
                 <option value="any">PSS bin: Any</option>
                 {PSS_BIN_ORDER.map((b) => <option key={b} value={b}>{b}</option>)}
               </select>
+              <input
+                type="text"
+                placeholder="Search team…"
+                value={teamSearch}
+                onChange={(e) => setTeamSearch(e.target.value)}
+                style={{ ...selectStyle, width: 130, outline: 'none' }}
+              />
               <select value={mssBinFilter} onChange={(e) => setMssBinFilter(e.target.value)} style={selectStyle}>
                 <option value="any">MSS confidence: Any</option>
                 {MSS_BIN_ORDER.map((b) => <option key={b} value={b}>{b}</option>)}
