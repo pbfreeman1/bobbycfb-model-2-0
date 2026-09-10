@@ -272,7 +272,7 @@ function DrilldownModal({ row, range, agreementAll, onClose }) {
           </div>
         ) : <div style={{ ...FM, fontSize: 12, color: C.dim }}>No PSS data for this game.</div>
       ) : (
-        gm ? (
+        gm ? (<>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px 16px' }}>
             <Stat label="PICK" value={mp ? favored(mp.team, mp.num) : '—'} size={16} />
             <Stat label="MSS" value={fmt(gm.mss, 1)} size={16} color={MSS_BIN_COLOR[gm.confidence_bin]} />
@@ -286,7 +286,7 @@ function DrilldownModal({ row, range, agreementAll, onClose }) {
             <Stat label="MODEL PLAY?" value={gm.suggested_play ? 'Yes' : 'No'} color={gm.suggested_play ? C.agree : C.dim} />
           </div>
           <div style={{ marginTop: 16 }}><ModelBreakdownTable row={row} /></div>
-        ) : <div style={{ ...FM, fontSize: 12, color: C.dim }}>No MSS data for this game.</div>
+        </>) : <div style={{ ...FM, fontSize: 12, color: C.dim }}>No MSS data for this game.</div>
       )}
     </Modal>
   );
