@@ -1,0 +1,2051 @@
+'use client';
+// Standalone copy of the original BobbyModel (MSS) dashboard, split out of
+// `/` so it keeps working unchanged once `/` becomes the new consolidated
+// dashboard (see app/page.js). Edit this file, not `/`, for MSS-only changes.
+
+import { useEffect, useMemo, useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { getCurrentWeek } from '../lib/supabase';
+
+const SUPABASE_URL = 'https://zpmdrazbqgzheqkvfltv.supabase.co';
+const SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpwbWRyYXpicWd6aGVxa3ZmbHR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgzMDY0MjksImV4cCI6MjEwMzg4MjQyOX0.NnVqnpyXRuu5zVpYa12NZ1jl24u2dPWL2vkiQKghuag';
+
+const SB_HEADERS = {
+  apikey: SUPABASE_ANON_KEY,
+  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+  'Content-Type': 'application/json',
+};
+
+const COLUMNS = [
+  { key: 'rank', label: 'Rank', sortable: true },
+  { key: 'matchup', label: 'Matchup', sortable: false, sticky: true },
+  { key: 'kickoff_at', label: 'Kickoff', sortable: true },
+  { key: 'vegas_line', label: 'Vegas Line', sortable: true },
+  { key: 'line_move', label: 'Move', sortable: true },
+  { key: 'over_under', label: 'O/U', sortable: true },
+  { key: 'consensus_spread', label: 'Consensus', sortable: true },
+  { key: 'edge', label: 'Edge', sortable: true },
+  { key: 'agreement', label: 'Agree % (Top-K)', sortable: true },
+  { key: 'agreement_all_pct', label: 'Agree % (All)', sortable: true },
+  { key: 'stddev', label: 'StdDev', sortable: true },
+  { key: 'range', label: 'Range', sortable: true },
+  { key: 'mss', label: 'MSS', sortable: true },
+  { key: 'confidence_bin', label: 'Confidence', sortable: true },
+  { key: 'suggested_play', label: 'Model Play?', sortable: true },
+  { key: 'valid_model_count', label: '# Models', sortable: true },
+  { key: 'tv_network', label: 'TV', sortable: false },
+  { key: 'lean', label: 'Lean', sortable: false },
+  { key: 'play', label: 'My Play', sortable: false },
+  { key: 'notes', label: 'Notes', sortable: false },
+];
+
+const TOOLTIPS = {
+  rank: 'Games ranked 1–N by Model Strength Score (MSS), the same backtested composite metric used for confidence — not a separate ad-hoc formula. #1 is the strongest signal this week.',
+  matchup: 'Away team @ home team.',
+  kickoff_at: 'Scheduled kickoff time, shown in Eastern Time.',
+  vegas_line: 'The favored team and current market spread.',
+  line_move: 'How many points the market has moved since the line opened. Positive = moved toward the home team; negative = moved toward the away team.',
+  over_under: 'The market total (combined predicted points for both teams) from sportsbook lines.',
+  consensus_spread: "BobbyCFB’s weighted-average predicted spread, shown as the team and price the model itself would favor — same side as the Edge, converted to standard sportsbook notation (favorite negative, underdog positive).",
+  edge: 'Consensus spread minus the Vegas line. The size of the disagreement between the model consensus and the market — the core signal this system is built around.',
+  agreement: 'The fraction of the Top-K model pool (the ~7 models actually used for the consensus) whose prediction falls on the same side of the market line as the edge, with the team that direction favors and the raw count.',
+  agreement_all_pct: 'The same agreement calculation, but across every model that submitted a prediction this week (not just the Top-K pool used for consensus). Useful as a sanity check — if Top-K and All disagree sharply, the Top-K pool may be an outlier relative to the wider field.',
+  stddev: 'Standard deviation of predicted spreads across the selected top models. Lower means the models are tightly clustered; higher means they disagree with each other.',
+  range: 'The spread between the most bullish and most bearish top-model prediction (max − min). A tight range means all the top models are in the same neighborhood; a wide range can mean one outlier is skewing StdDev without the whole group actually disagreeing.',
+  mss: 'Model Strength Score — a composite confidence score combining edge size, agreement, and variance. Higher MSS means a stronger, more reliable signal.',
+  confidence_bin: 'A qualitative bucket (Very Strong → Very Weak) derived from MSS, for quick scanning. The backtested qualification filter (Edge ≥1.5, StdDev ≤2.5, Agreement ≥85%) is what actually flags a Model Play — not this bucket alone.',
+  suggested_play: 'Whether this game passes the backtested qualification filter (Edge ≥1.5, StdDev ≤2.5, Agreement ≥85%), which historically hit ~58% ATS across 2021–2025 backtesting. This is the model’s pick, separate from your own.',
+  valid_model_count: 'How many of the ~30+ source systems submitted a usable prediction for this game.',
+  tv_network: 'Broadcast network airing the game, where available.',
+  lean: 'A quick, informal flag for games you’re leaning toward but haven’t committed to. Not counted in your official season record.',
+  play: 'Your official play for this game — the side, bet type, and unit size you’re actually tracking for season results.',
+  notes: 'Your private notes on this game — injuries, weather, anything worth remembering.',
+};
+
+function fmt(n, digits = 1) {
+  if (n === null || n === undefined) return '—';
+  const num = typeof n === 'string' ? parseFloat(n) : n;
+  if (Number.isNaN(num)) return '—';
+  return num.toFixed(digits);
+}
+
+function fmtLine(n) {
+  if (n === null || n === undefined) return '—';
+  const num = typeof n === 'string' ? parseFloat(n) : n;
+  if (Number.isNaN(num)) return '—';
+  return num > 0 ? `+${num}` : `${num}`;
+}
+
+function fmtFavoredLine(line, homeTeam, awayTeam) {
+  if (line === null || line === undefined) return '—';
+  const num = typeof line === 'string' ? parseFloat(line) : line;
+  if (Number.isNaN(num)) return '—';
+  if (num === 0) return "Pick'em";
+  if (num > 0) return `${homeTeam} -${num}`;
+  return `${awayTeam} -${Math.abs(num)}`;
+}
+
+function fmtKickoff(iso) {
+  if (!iso) return 'TBD';
+  const d = new Date(iso);
+  return (
+    d.toLocaleString('en-US', {
+      timeZone: 'America/New_York',
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    }) + ' ET'
+  );
+}
+
+// The stored line is a single number per game: positive = home favored.
+// Standard sportsbook notation always shows the favorite with a minus sign,
+// so home's displayed number is -V and away's is +V (i.e. V itself).
+function spreadForSide(vegasLine, side) {
+  if (vegasLine === null || vegasLine === undefined) return null;
+  const v = parseFloat(vegasLine);
+  if (Number.isNaN(v)) return null;
+  return side === 'home' ? -v : v;
+}
+
+// Which side the model consensus itself likes (same side as the edge),
+// and that side's own predicted line in standard notation.
+function consensusPick(r) {
+  if (r.consensus_spread == null || r.edge == null) return null;
+  const side = parseFloat(r.edge) >= 0 ? 'home' : 'away';
+  const team = side === 'home' ? r.home_team : r.away_team;
+  const num = spreadForSide(r.consensus_spread, side);
+  return { side, team, num };
+}
+
+const TEAM_ABBR = {
+  'Alabama': 'ALA', 'Auburn': 'AUB', 'California': 'CAL', 'Cincinnati': 'CIN',
+  'Colorado St.': 'CSU', 'Duke': 'DUKE', 'Eastern Mich.': 'EMU', 'Florida': 'FLA',
+  'Florida St.': 'FSU', 'Georgia Tech': 'GT', 'Hawaii': 'HAW', 'Houston': 'HOU',
+  'Illinois': 'ILL', 'Indiana': 'IND', 'Iowa': 'IOWA', 'James Madison': 'JMU',
+  'LSU': 'LSU', 'Memphis': 'MEM', 'Michigan': 'MICH', 'Michigan St.': 'MSU',
+  'Mississippi': 'MISS', 'Mississippi St.': 'MSST', 'Nebraska': 'NEB', 'Nevada': 'NEV',
+  'New Mexico': 'UNM', 'Notre Dame': 'ND', 'Ohio St.': 'OSU', 'Oklahoma': 'OU',
+  'Oregon': 'ORE', 'Penn St.': 'PSU', 'Pittsburgh': 'PITT', 'Rutgers': 'RUTG',
+  'South Carolina': 'SCAR', 'South Florida': 'USF', 'Stanford': 'STAN', 'Texas': 'TEX',
+  'Texas A&M': 'TAMU', 'Troy St.': 'TROY', 'Tulsa': 'TLSA', 'USC': 'USC',
+  'Wake Forest': 'WAKE', 'Washington': 'WASH', 'West Va.': 'WVU',
+  'East Carolina': 'ECU', 'Baylor': 'BAY', 'UCLA': 'UCLA', 'Boston College': 'BC',
+  'Wyoming': 'WYO', 'Tulane': 'TULN', 'San Jose St.': 'SJSU', 'Florida Atlantic': 'FAU',
+  'SMU': 'SMU', 'Colorado': 'COLO', 'UNLV': 'UNLV', 'Oregon St.': 'ORST', 'UAB': 'UAB',
+  'North Texas': 'UNT', 'Northern Ill.': 'NIU', 'Liberty': 'LIB', 'Clemson': 'CLEM',
+  'Arkansas St.': 'ARST', 'Western Mich.': 'WMU', 'Toledo': 'TOL', 'Louisville': 'LOU',
+  'Louisiana-Monroe': 'ULM', 'Ohio': 'OHIO', 'Western Kentucky': 'WKU', 'Central Mich.': 'CMU',
+  'Wisconsin': 'WISC', 'Ball St.': 'BALL', 'UTEP': 'UTEP', 'Boise St.': 'BSU',
+  'Marshall': 'MRSH', 'Miami (Ohio)': 'M-OH', 'Massachusetts': 'UMASS', 'Kent': 'KENT',
+  'Florida Intl.': 'FIU', 'Miami (Fla.)': 'MIA', 'Texas St.': 'TXST', 'Missouri St.': 'MOST',
+  'Sam Houston St.': 'SHSU', 'Oklahoma St.': 'OKST', 'Fresno St.': 'FRES', 'Akron': 'AKR',
+  'Washington St.': 'WSU', 'Coastal Carolina': 'CCU',
+};
+function abbr(team) {
+  return TEAM_ABBR[team] || team;
+}
+
+function fmtKickoffPrint(iso) {
+  if (!iso) return 'TBD';
+  const d = new Date(iso);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', weekday: 'short', month: 'numeric', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  }).formatToParts(d);
+  const get = (t) => parts.find((p) => p.type === t)?.value || '';
+  const time = `${get('hour')}:${get('minute')}${get('dayPeriod')?.[0]?.toLowerCase() || ''}`;
+  return `${get('weekday')} ${get('month')}/${get('day')} ${time}`;
+}
+
+const CONFIDENCE_ORDER = ['Very Strong', 'Strong', 'Moderate', 'Weak', 'Very Weak'];
+
+// Grade a pick against a finished game. Straight units, no vig modeled.
+function gradePick(pick, game) {
+  if (!game || game.home_score == null || game.away_score == null) return null;
+  const margin = game.home_score - game.away_score;
+  if (pick.pick_type === 'total') {
+    if (pick.line_played == null) return null;
+    const total = game.home_score + game.away_score;
+    if (total === pick.line_played) return 'push';
+    if (pick.side === 'over') return total > pick.line_played ? 'win' : 'loss';
+    if (pick.side === 'under') return total < pick.line_played ? 'win' : 'loss';
+    return null;
+  }
+  if (pick.line_played == null) return null;
+  if (margin === pick.line_played) return 'push';
+  if (pick.side === 'home') return margin > pick.line_played ? 'win' : 'loss';
+  if (pick.side === 'away') return margin < pick.line_played ? 'win' : 'loss';
+  return null;
+}
+
+// CLV: positive = you beat the closing line. Spread only (no closing total tracked yet).
+function computeCLV(pick, game) {
+  if (pick.pick_type !== 'spread') return null;
+  if (game?.closing_line == null || pick.line_played == null) return null;
+  const closing = parseFloat(game.closing_line);
+  const played = parseFloat(pick.line_played);
+  const sign = pick.side === 'home' ? 1 : -1;
+  return sign * (closing - played);
+}
+
+function useOutsideClose(ref, onClose) {
+  useEffect(() => {
+    function handler(e) {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [ref, onClose]);
+}
+
+function InfoIcon({ text }) {
+  const [pos, setPos] = useState(null);
+  const ref = useRef(null);
+
+  function show() {
+    const rect = ref.current.getBoundingClientRect();
+    let x = rect.left + rect.width / 2;
+    x = Math.max(120, Math.min(x, window.innerWidth - 120));
+    setPos({ x, y: rect.bottom + 8 });
+  }
+  function hide() {
+    setPos(null);
+  }
+
+  return (
+    <span
+      ref={ref}
+      className="info-icon"
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onClick={(e) => {
+        e.stopPropagation();
+        pos ? hide() : show();
+      }}
+    >
+      i
+      {pos &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div className="tooltip-fixed" style={{ left: pos.x, top: pos.y }}>
+            {text}
+          </div>,
+          document.body
+        )}
+      <style jsx>{`
+        .info-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 14px;
+          height: 14px;
+          border-radius: 50%;
+          background: #2a3042;
+          color: #8a92a3;
+          font-size: 10px;
+          font-style: italic;
+          font-weight: 700;
+          cursor: help;
+          text-transform: none;
+          margin-left: 5px;
+        }
+        .info-icon:hover {
+          background: #38bd94;
+          color: #0b0e14;
+        }
+      `}</style>
+    </span>
+  );
+}
+
+function TeamLogo({ src, alt }) {
+  if (!src) return null;
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className="team-logo"
+      onError={(e) => {
+        e.currentTarget.style.display = 'none';
+      }}
+    />
+  );
+}
+
+function PickModal({ game, existing, defaultStatus, onClose, onSaved, onDeleted }) {
+  const ref = useRef(null);
+  useOutsideClose(ref, onClose);
+
+  const [pickType, setPickType] = useState(existing?.pick_type || 'spread');
+  const [side, setSide] = useState(existing?.side || null);
+  const [units, setUnits] = useState(existing?.units || 1);
+  const [status, setStatus] = useState(existing?.status || defaultStatus || 'official');
+  const [saving, setSaving] = useState(false);
+
+  const homeLine = game.vegas_line;
+  const homeDisplay = spreadForSide(homeLine, 'home');
+  const awayDisplay = spreadForSide(homeLine, 'away');
+
+  async function handleSave() {
+    if (!side) return;
+    setSaving(true);
+    // line_played is always the game's single stored line (home-positive
+    // convention), regardless of which side is picked — grading logic
+    // depends on both sides sharing the same threshold.
+    const linePlayed = pickType === 'total' ? game.over_under : (homeLine != null ? parseFloat(homeLine) : null);
+    const body = {
+      game_id: game.id,
+      game_metrics_id: game.game_metrics_id || null,
+      played: true,
+      pick_type: pickType,
+      side,
+      line_played: linePlayed,
+      units,
+      status,
+    };
+    // If editing an existing pick, PATCH it by id; otherwise INSERT new.
+    if (existing?.id) {
+      await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${existing.id}`, {
+        method: 'PATCH',
+        headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+        body: JSON.stringify(body),
+      });
+    } else {
+      await fetch(`${SUPABASE_URL}/rest/v1/user_picks`, {
+        method: 'POST',
+        headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+        body: JSON.stringify(body),
+      });
+    }
+    setSaving(false);
+    onSaved();
+  }
+
+  async function handleDelete() {
+    setSaving(true);
+    const deleteId = existing?.id;
+    if (deleteId) {
+      await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${deleteId}`, {
+        method: 'DELETE',
+        headers: SB_HEADERS,
+      });
+    }
+    setSaving(false);
+    onDeleted();
+  }
+
+  return createPortal(
+    <div className="overlay">
+      <div className="modal" ref={ref}>
+        <h3>{game.away_team} @ {game.home_team}</h3>
+
+        <div className="seg">
+          <button className={pickType === 'spread' ? 'on' : ''} onClick={() => { setPickType('spread'); setSide(null); }}>Spread</button>
+          <button className={pickType === 'total' ? 'on' : ''} onClick={() => { setPickType('total'); setSide(null); }}>Total</button>
+        </div>
+
+        {pickType === 'spread' ? (
+          <div className="sidepick">
+            <button className={side === 'away' ? 'on' : ''} onClick={() => setSide('away')}>
+              {game.away_team}<span>{fmtLine(awayDisplay)}</span>
+            </button>
+            <button className={side === 'home' ? 'on' : ''} onClick={() => setSide('home')}>
+              {game.home_team}<span>{fmtLine(homeDisplay)}</span>
+            </button>
+          </div>
+        ) : (
+          <div className="sidepick">
+            <button className={side === 'over' ? 'on' : ''} onClick={() => setSide('over')}>
+              Over<span>{game.over_under ?? '—'}</span>
+            </button>
+            <button className={side === 'under' ? 'on' : ''} onClick={() => setSide('under')}>
+              Under<span>{game.over_under ?? '—'}</span>
+            </button>
+          </div>
+        )}
+
+        <div className="row">
+          <label>Units</label>
+          <div className="units">
+            {[1, 2, 3, 4, 5].map((u) => (
+              <button key={u} className={units === u ? 'on' : ''} onClick={() => setUnits(u)}>{u}</button>
+            ))}
+          </div>
+        </div>
+
+        <div className="row">
+          <label>Status</label>
+          <div className="seg small">
+            <button className={status === 'lean' ? 'on' : ''} onClick={() => setStatus('lean')}>Lean</button>
+            <button className={status === 'official' ? 'on' : ''} onClick={() => setStatus('official')}>Official</button>
+          </div>
+        </div>
+
+        <div className="actions">
+          {existing && <button className="danger" onClick={handleDelete} disabled={saving}>Remove</button>}
+          <button className="ghost" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="primary" onClick={handleSave} disabled={saving || !side}>{saving ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
+
+      <style jsx>{`
+        .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+        .modal { background: #131722; border: 1px solid #2a3042; border-radius: 12px; padding: 20px; width: 340px; max-width: 90vw; }
+        h3 { margin: 0 0 14px; font-size: 15px; color: #e6e9ef; }
+        .seg { display: flex; gap: 6px; margin-bottom: 12px; }
+        .seg button { flex: 1; padding: 7px; border-radius: 6px; border: 1px solid #2a3042; background: #0b0e14; color: #8a92a3; cursor: pointer; font-size: 13px; }
+        .seg.small button { padding: 5px; font-size: 12px; }
+        .seg button.on { background: #38bd94; color: #0b0e14; border-color: #38bd94; font-weight: 600; }
+        .sidepick { display: flex; gap: 8px; margin-bottom: 14px; }
+        .sidepick button { flex: 1; padding: 10px 6px; border-radius: 8px; border: 1px solid #2a3042; background: #0b0e14; color: #e6e9ef; cursor: pointer; text-align: center; display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; }
+        .sidepick button span { font-weight: 400; color: #8a92a3; font-size: 12px; }
+        .sidepick button.on { border-color: #38bd94; background: rgba(56,189,148,0.1); }
+        .sidepick button.on span { color: #38bd94; }
+        .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+        .row label { font-size: 12px; color: #8a92a3; text-transform: uppercase; letter-spacing: 0.04em; }
+        .units { display: flex; gap: 4px; }
+        .units button { width: 28px; height: 28px; border-radius: 6px; border: 1px solid #2a3042; background: #0b0e14; color: #8a92a3; cursor: pointer; font-size: 13px; }
+        .units button.on { background: #38bd94; color: #0b0e14; border-color: #38bd94; font-weight: 700; }
+        .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+        .actions button { padding: 7px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; border: 1px solid #2a3042; }
+        .primary { background: #38bd94; color: #0b0e14; border-color: #38bd94; font-weight: 600; }
+        .primary:disabled { opacity: 0.5; cursor: not-allowed; }
+        .ghost { background: transparent; color: #8a92a3; }
+        .danger { background: transparent; color: #f87171; border-color: #f87171; margin-right: auto; }
+      `}</style>
+    </div>,
+    document.body
+  );
+}
+
+function NoteModal({ game, existing, onClose, onSaved }) {
+  const ref = useRef(null);
+  useOutsideClose(ref, onClose);
+  const [text, setText] = useState(existing?.note || '');
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    setSaving(true);
+    if (game.pick?.id) {
+      await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${game.pick.id}`, {
+        method: 'PATCH',
+        headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+        body: JSON.stringify({ note: text }),
+      });
+    } else {
+      await fetch(`${SUPABASE_URL}/rest/v1/user_picks`, {
+        method: 'POST',
+        headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+        body: JSON.stringify({ game_id: game.id, note: text }),
+      });
+    }
+    setSaving(false);
+    onSaved(text);
+  }
+
+  return createPortal(
+    <div className="overlay">
+      <div className="modal" ref={ref}>
+        <h3>Notes — {game.away_team} @ {game.home_team}</h3>
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} placeholder="Injuries, weather, matchup notes…" />
+        <div className="actions">
+          <button className="ghost" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="primary" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
+      <style jsx>{`
+        .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+        .modal { background: #131722; border: 1px solid #2a3042; border-radius: 12px; padding: 20px; width: 380px; max-width: 90vw; }
+        h3 { margin: 0 0 14px; font-size: 15px; color: #e6e9ef; }
+        textarea { width: 100%; background: #0b0e14; border: 1px solid #2a3042; border-radius: 8px; color: #e6e9ef; padding: 10px; font-size: 13px; resize: vertical; font-family: inherit; }
+        .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+        .actions button { padding: 7px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; border: 1px solid #2a3042; }
+        .primary { background: #38bd94; color: #0b0e14; border-color: #38bd94; font-weight: 600; }
+        .ghost { background: transparent; color: #8a92a3; }
+      `}</style>
+    </div>,
+    document.body
+  );
+}
+
+// Lightweight tooltip for mobile cards (no portal needed - cards are in normal flow)
+function MobInfoIcon({ text }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', verticalAlign: 'middle', marginLeft: 3 }}>
+      <span
+        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 13, height: 13, borderRadius: '50%', background: '#2a3042', color: '#8a92a3', fontSize: 8, fontStyle: 'italic', fontWeight: 700, cursor: 'help', flexShrink: 0 }}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onTouchStart={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+      >i</span>
+      {open && (
+        <span style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)', width: 200, background: '#1a1e2b', border: '1px solid #2a3042', color: '#d3d8e2', fontSize: 11, lineHeight: 1.5, padding: '8px 10px', borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,.5)', zIndex: 50, whiteSpace: 'normal', pointerEvents: 'none' }}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
+const CUSTOM_TYPES = ['Parlay', 'Moneyline', 'Teaser', 'Other'];
+
+function CustomPlayModal({ season, week, onClose, onSaved }) {
+  const ref = useRef(null);
+  useOutsideClose(ref, onClose);
+  const [label, setLabel] = useState('');
+  const [type, setType] = useState('Parlay');
+  const [units, setUnits] = useState(1);
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (!label.trim()) return;
+    setSaving(true);
+    await fetch(`${SUPABASE_URL}/rest/v1/user_picks`, {
+      method: 'POST',
+      headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+      body: JSON.stringify({
+        is_custom: true,
+        custom_label: label.trim(),
+        custom_type: type.toLowerCase(),
+        units: parseFloat(units) || 1,
+        season,
+        week,
+        played: true,
+        status: 'official',
+        pick_type: 'spread',
+      }),
+    });
+    setSaving(false);
+    onSaved();
+  }
+
+  return createPortal(
+    <div className="overlay">
+      <div className="modal" ref={ref}>
+        <h3>Add Custom Play — Week {week}</h3>
+        <div className="modal-field">
+          <label>Label</label>
+          <input
+            autoFocus
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && !saving && label.trim() && handleSave()}
+            placeholder="e.g. Alabama ML + Georgia ML parlay"
+          />
+        </div>
+        <div className="modal-field">
+          <label>Type</label>
+          <select value={type} onChange={(e) => setType(e.target.value)}>
+            {CUSTOM_TYPES.map((t) => <option key={t}>{t}</option>)}
+          </select>
+        </div>
+        <div className="modal-field">
+          <label>Units</label>
+          <input type="number" min="0.5" max="10" step="0.5" value={units} onChange={(e) => setUnits(e.target.value)} style={{ width: 80 }} />
+        </div>
+        <div className="actions">
+          <button className="ghost" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="primary" onClick={handleSave} disabled={saving || !label.trim()}>
+            {saving ? 'Saving…' : 'Add Play'}
+          </button>
+        </div>
+        <style jsx>{`
+          .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+          .modal { background: #131722; border: 1px solid #2a3042; border-radius: 12px; padding: 20px; width: 380px; max-width: 90vw; }
+          h3 { margin: 0 0 16px; font-size: 15px; color: #e6e9ef; }
+          .modal-field { margin-bottom: 12px; display: flex; flex-direction: column; gap: 5px; }
+          .modal-field label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #8a92a3; }
+          .modal-field input, .modal-field select { background: #0b0e14; border: 1px solid #2a3042; border-radius: 8px; color: #e6e9ef; padding: 8px 10px; font-size: 13px; font-family: inherit; width: 100%; }
+          .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+          .actions button { padding: 8px 16px; border-radius: 6px; font-size: 13px; cursor: pointer; border: 1px solid #2a3042; font-family: inherit; }
+          .primary { background: #38bd94; color: #0b0e14; border-color: #38bd94; font-weight: 700; }
+          .primary:disabled { opacity: 0.5; cursor: not-allowed; }
+          .ghost { background: transparent; color: #8a92a3; }
+        `}</style>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+export default function Dashboard() {
+  const [season, setSeason] = useState(2026);
+  const [week, setWeek] = useState(null); // resolved to the latest week with games below
+  const [rows, setRows] = useState([]);
+  const [picksByGame, setPicksByGame] = useState({});
+  const [logos, setLogos] = useState({});
+  const [ranges, setRanges] = useState({});
+  const [agreementAll, setAgreementAll] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const [sortKey, setSortKey] = useState('mss');
+  const [sortDir, setSortDir] = useState('desc');
+
+  const [search, setSearch] = useState('');
+  const [confFilter, setConfFilter] = useState('All');
+  const [playOnly, setPlayOnly] = useState(false);
+  const [minEdge, setMinEdge] = useState('');
+  const [minMove, setMinMove] = useState('');
+
+  const [pickModalGame, setPickModalGame] = useState(null);
+  const [pickModalDefaultStatus, setPickModalDefaultStatus] = useState('official');
+  const [noteModalGame, setNoteModalGame] = useState(null);
+
+  const [showMyCard, setShowMyCard] = useState(false);
+  const [lockHistory, setLockHistory] = useState(null);
+  const [customPlays, setCustomPlays] = useState([]);
+  const [showCustomModal, setShowCustomModal] = useState(false);
+  const [mobileSort, setMobileSort] = useState('mss');
+  const [mobilePlaysOnly, setMobilePlaysOnly] = useState(false);
+  const [showMobileTable, setShowMobileTable] = useState(false);
+  const [showSeasonStats, setShowSeasonStats] = useState(false);
+  const [seasonPicks, setSeasonPicks] = useState(null);
+  const [seasonLoading, setSeasonLoading] = useState(false);
+
+  const [cardConfFilter, setCardConfFilter] = useState('All');
+  const [cardTypeFilter, setCardTypeFilter] = useState('All');
+
+  async function loadWeek() {
+    setLoading(true);
+    setError(null);
+    try {
+      const gamesUrl = `${SUPABASE_URL}/rest/v1/games?select=id,home_team,away_team,kickoff_at,current_line,opening_line,closing_line,over_under,tv_network,status,home_score,away_score,game_metrics(id,vegas_line,consensus_spread,edge,agreement,stddev,mss,confidence_bin,suggested_play,suggested_side,suggested_line,valid_model_count,actual_k,topk_model_ids)&season=eq.${season}&week=eq.${week}`;
+      const logosUrl = `${SUPABASE_URL}/rest/v1/team_logos?select=team_name,logo_url`;
+
+      const customUrl = `${SUPABASE_URL}/rest/v1/user_picks?select=*&is_custom=eq.true&season=eq.${season}&week=eq.${week}&order=created_at.asc`;
+      const [gamesRes, logosRes, customRes] = await Promise.all([
+        fetch(gamesUrl, { headers: SB_HEADERS }),
+        fetch(logosUrl, { headers: SB_HEADERS }),
+        fetch(customUrl, { headers: SB_HEADERS }),
+      ]);
+      if (!gamesRes.ok) throw new Error(`Supabase error ${gamesRes.status}`);
+      const gamesData = await gamesRes.json();
+      const logosData = logosRes.ok ? await logosRes.json() : [];
+
+      // Fetch picks filtered to only this week's game IDs — fixes stale picks
+      // from other weeks showing on My Card.
+      let picksData = [];
+      if (gamesData.length > 0) {
+        const ids = gamesData.map((g) => g.id).join(',');
+        const picksRes = await fetch(
+          `${SUPABASE_URL}/rest/v1/user_picks?select=*&game_id=in.(${ids})`,
+          { headers: SB_HEADERS }
+        );
+        if (picksRes.ok) picksData = await picksRes.json();
+      }
+
+      const byGame = {};
+      for (const p of picksData) byGame[p.game_id] = p;
+
+      const logoMap = {};
+      for (const l of logosData) logoMap[l.team_name] = l.logo_url;
+
+      // Fetch raw predictions for all games this week, then compute per-game
+      // range (max - min) restricted to each game's top-K model pool.
+      let rangeByGame = {};
+      let agreementAllByGame = {};
+      if (gamesData.length > 0) {
+        const gameIds = gamesData.map((g) => g.id).join(',');
+        const predsUrl = `${SUPABASE_URL}/rest/v1/raw_predictions?select=game_id,model_id,predicted_margin&game_id=in.(${gameIds})`;
+        const predsRes = await fetch(predsUrl, { headers: SB_HEADERS });
+        if (predsRes.ok) {
+          const preds = await predsRes.json();
+          const byGamePreds = {};
+          for (const p of preds) {
+            if (!byGamePreds[p.game_id]) byGamePreds[p.game_id] = [];
+            byGamePreds[p.game_id].push(p);
+          }
+          for (const g of gamesData) {
+            const m = Array.isArray(g.game_metrics) ? g.game_metrics[0] : g.game_metrics;
+            const topk = m?.topk_model_ids || [];
+            const gamePreds = byGamePreds[g.id] || [];
+            const topkPreds = gamePreds
+              .filter((p) => topk.includes(p.model_id))
+              .map((p) => parseFloat(p.predicted_margin));
+            if (topkPreds.length >= 2) {
+              rangeByGame[g.id] = Math.max(...topkPreds) - Math.min(...topkPreds);
+            }
+            // Agreement across the FULL valid model pool (not just Top-K),
+            // using the same "which side of the market line" logic as the
+            // official agreement metric.
+            const vegasLine = m?.vegas_line != null ? parseFloat(m.vegas_line) : (g.current_line != null ? parseFloat(g.current_line) : null);
+            const edgeVal = m?.edge != null ? parseFloat(m.edge) : null;
+            if (vegasLine != null && edgeVal != null && gamePreds.length > 0) {
+              const edgePositive = edgeVal > 0;
+              let agreeCount = 0;
+              for (const p of gamePreds) {
+                const margin = parseFloat(p.predicted_margin);
+                if (Number.isNaN(margin)) continue;
+                if ((margin > vegasLine) === edgePositive) agreeCount++;
+              }
+              agreementAllByGame[g.id] = { count: agreeCount, total: gamePreds.length, pct: (agreeCount / gamePreds.length) * 100 };
+            }
+          }
+        }
+      }
+
+      setRows(gamesData);
+      setPicksByGame(byGame);
+      setLogos(logoMap);
+      setRanges(rangeByGame);
+      setAgreementAll(agreementAllByGame);
+      setCustomPlays(customRes.ok ? await customRes.json() : []);
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    getCurrentWeek(season).then((w) => { if (!cancelled) setWeek(w); });
+    return () => { cancelled = true; };
+  }, [season]);
+
+  useEffect(() => {
+    if (week != null) loadWeek();
+  }, [season, week]);
+
+  async function loadSeasonStats() {
+    setSeasonLoading(true);
+    try {
+      const [seasonRes, lockRes] = await Promise.all([
+        fetch(`${SUPABASE_URL}/rest/v1/user_picks?select=*,games!inner(season,home_team,away_team,home_score,away_score,status,closing_line)&status=eq.official&games.status=eq.final&games.season=eq.${season}`, { headers: SB_HEADERS }),
+        // Load ALL lock picks across all seasons for the BRLW history table
+        fetch(`${SUPABASE_URL}/rest/v1/user_picks?select=*,games(season,week,home_team,away_team,home_score,away_score,status)&is_lock=eq.true&order=games(season).desc,games(week).desc&limit=50`, { headers: SB_HEADERS }),
+      ]);
+      setSeasonPicks(seasonRes.ok ? await seasonRes.json() : []);
+      setLockHistory(lockRes.ok ? await lockRes.json() : []);
+    } finally {
+      setSeasonLoading(false);
+    }
+  }
+
+  function refreshAfterPickChange() {
+    setPickModalGame(null);
+    loadWeek();
+    if (showSeasonStats) loadSeasonStats();
+  }
+
+  async function toggleLock(row) {
+    if (row.pick?.status !== 'official') return;
+    const isNowLock = !row.pick.is_lock;
+    // If setting a new lock, clear any existing lock for this week first
+    if (isNowLock) {
+      const existingLock = flat.find((r) => r.pick?.is_lock && r.id !== row.id);
+      if (existingLock?.pick?.id) {
+        await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${existingLock.pick.id}`, {
+          method: 'PATCH',
+          headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+          body: JSON.stringify({ is_lock: false }),
+        });
+      }
+    }
+    await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${row.pick.id}`, {
+      method: 'PATCH',
+      headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+      body: JSON.stringify({ is_lock: isNowLock }),
+    });
+    loadWeek();
+    if (showSeasonStats) loadSeasonStats();
+  }
+
+  const flat = useMemo(() => {
+    return rows.map((g) => {
+      const m = Array.isArray(g.game_metrics) ? g.game_metrics[0] : g.game_metrics;
+      const pick = picksByGame[g.id] || null;
+      const agreementPct = m?.agreement != null ? parseFloat(m.agreement) * 100 : null;
+      // Agreement is defined over the Top-K pool used for consensus (actual_k),
+      // not the full valid_model_count — those are two different denominators.
+      const modelsAgreeing =
+        agreementPct != null && m?.actual_k != null
+          ? Math.round((agreementPct / 100) * m.actual_k)
+          : null;
+      const lineMove =
+        g.opening_line != null && g.current_line != null
+          ? parseFloat(g.current_line) - parseFloat(g.opening_line)
+          : null;
+      // Agreement is measured relative to the EDGE direction (which side of the
+      // market line the top models are on), not the raw sign of the consensus
+      // average — those can point different ways, as they did for CSU/Wyoming.
+      const agreeSide =
+        m?.edge != null
+          ? parseFloat(m.edge) > 0
+            ? g.home_team
+            : g.away_team
+          : null;
+      return {
+        id: g.id,
+        matchup: `${g.away_team} @ ${g.home_team}`,
+        away_team: g.away_team,
+        home_team: g.home_team,
+        kickoff_at: g.kickoff_at,
+        status: g.status,
+        home_score: g.home_score,
+        away_score: g.away_score,
+        closing_line: g.closing_line,
+        vegas_line: m?.vegas_line ?? g.current_line,
+        line_move: lineMove,
+        over_under: g.over_under ?? null,
+        tv_network: g.tv_network ?? null,
+        consensus_spread: m?.consensus_spread ?? null,
+        edge: m?.edge ?? null,
+        agreement: agreementPct,
+        agree_side: agreeSide,
+        models_agreeing: modelsAgreeing,
+        actual_k: m?.actual_k ?? null,
+        agreement_all_pct: agreementAll[g.id]?.pct ?? null,
+        agreement_all_count: agreementAll[g.id]?.count ?? null,
+        agreement_all_total: agreementAll[g.id]?.total ?? null,
+        stddev: m?.stddev ?? null,
+        range: ranges[g.id] ?? null,
+        mss: m?.mss ?? null,
+        confidence_bin: m?.confidence_bin ?? null,
+        suggested_play: !!m?.suggested_play,
+        suggested_side: m?.suggested_side ?? null,
+        suggested_line: m?.suggested_line ?? null,
+        valid_model_count: m?.valid_model_count ?? null,
+        game_metrics_id: m?.id ?? null,
+        pick,
+      };
+    });
+  }, [rows, picksByGame, ranges, agreementAll]);
+
+  const filtered = useMemo(() => {
+    let out = flat;
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      out = out.filter((r) => r.home_team.toLowerCase().includes(q) || r.away_team.toLowerCase().includes(q));
+    }
+    if (confFilter !== 'All') out = out.filter((r) => r.confidence_bin === confFilter);
+    if (playOnly) out = out.filter((r) => r.suggested_play);
+    if (minEdge !== '') {
+      const threshold = parseFloat(minEdge);
+      if (!Number.isNaN(threshold)) out = out.filter((r) => r.edge !== null && Math.abs(parseFloat(r.edge)) >= threshold);
+    }
+    if (minMove !== '') {
+      const threshold = parseFloat(minMove);
+      if (!Number.isNaN(threshold)) out = out.filter((r) => r.line_move !== null && Math.abs(r.line_move) >= threshold);
+    }
+    return out;
+  }, [flat, search, confFilter, playOnly, minEdge, minMove]);
+
+  // Rank 1..N by MSS descending (ties broken by |edge|) — the same
+  // backtested composite metric used for Confidence, not a separate formula.
+  const rankByGameId = useMemo(() => {
+    const ranked = [...flat].sort((a, b) => {
+      const am = a.mss ?? -Infinity;
+      const bm = b.mss ?? -Infinity;
+      if (bm !== am) return bm - am;
+      const ae = a.edge != null ? Math.abs(parseFloat(a.edge)) : -Infinity;
+      const be = b.edge != null ? Math.abs(parseFloat(b.edge)) : -Infinity;
+      return be - ae;
+    });
+    const map = {};
+    ranked.forEach((r, i) => { map[r.id] = i + 1; });
+    return map;
+  }, [flat]);
+
+  const sorted = useMemo(() => {
+    const out = [...filtered];
+    out.sort((a, b) => {
+      let av = sortKey === 'rank' ? rankByGameId[a.id] : a[sortKey];
+      let bv = sortKey === 'rank' ? rankByGameId[b.id] : b[sortKey];
+      if (sortKey === 'confidence_bin') {
+        av = CONFIDENCE_ORDER.indexOf(av); bv = CONFIDENCE_ORDER.indexOf(bv);
+        if (av === -1) av = 99; if (bv === -1) bv = 99;
+      } else if (sortKey === 'kickoff_at') {
+        av = av ? new Date(av).getTime() : Infinity; bv = bv ? new Date(bv).getTime() : Infinity;
+      } else if (sortKey === 'suggested_play') {
+        av = av ? 1 : 0; bv = bv ? 1 : 0;
+      } else if (typeof av === 'string' && av !== null && !Number.isNaN(parseFloat(av))) {
+        av = parseFloat(av); bv = parseFloat(bv);
+      }
+      if (av === null || av === undefined) return 1;
+      if (bv === null || bv === undefined) return -1;
+      if (av < bv) return sortDir === 'asc' ? -1 : 1;
+      if (av > bv) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return out;
+  }, [filtered, sortKey, sortDir, rankByGameId]);
+
+  // Print always sorts by kickoff time regardless of the on-screen sort,
+  // and respects the current filters.
+  const printSorted = useMemo(() => {
+    const out = [...filtered];
+    out.sort((a, b) => {
+      const at = a.kickoff_at ? new Date(a.kickoff_at).getTime() : Infinity;
+      const bt = b.kickoff_at ? new Date(b.kickoff_at).getTime() : Infinity;
+      return at - bt;
+    });
+    return out;
+  }, [filtered]);
+
+  function toggleSort(key) {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('desc'); }
+  }
+
+  async function deleteCustomPlay(id) {
+    await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${id}`, {
+      method: 'DELETE',
+      headers: SB_HEADERS,
+    });
+    loadWeek();
+  }
+
+  async function setCustomResult(id, result) {
+    await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${id}`, {
+      method: 'PATCH',
+      headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+      body: JSON.stringify({ result }),
+    });
+    loadWeek();
+    if (showSeasonStats) loadSeasonStats();
+  }
+
+  function shareCard() {
+    const DPR = 2;
+    const W = 640, PADDING = 28, ROW_H = 64, HEADER_H = 90;
+    const allPicks = [...myCardPicksAll, ...customPlays];
+    const lockRow = myCardPicksAll.find((r) => r.pick?.is_lock);
+    const regularPicks = myCardPicksAll.filter((r) => !r.pick?.is_lock);
+    const totalRows = (lockRow ? 1 : 0) + regularPicks.length + customPlays.length;
+    const CANVAS_H = HEADER_H + (totalRows * ROW_H) + 60 + (customPlays.length > 0 && regularPicks.length > 0 ? 32 : 0);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = W * DPR;
+    canvas.height = Math.max(300, CANVAS_H) * DPR;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(DPR, DPR);
+
+    // Background
+    ctx.fillStyle = '#0b0e14';
+    ctx.fillRect(0, 0, W, canvas.height / DPR);
+
+    // Header bar
+    ctx.fillStyle = '#131722';
+    ctx.fillRect(0, 0, W, HEADER_H - 10);
+    ctx.fillStyle = '#38bd94';
+    ctx.font = 'bold 20px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.fillText('BobbyModels', PADDING, 34);
+    ctx.fillStyle = '#8a92a3';
+    ctx.font = '13px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.fillText(`Week ${week} Card  ·  ${season} Season`, PADDING, 56);
+    // Record summary
+    const graded = allPicks.filter((r) => {
+      const g = r.games || r;
+      return r.pick ? gradePick(r.pick, g) : (r.result && r.result !== null);
+    });
+    const w = allPicks.filter((r) => { const g = r.games || r; return r.pick ? gradePick(r.pick, g) === 'win' : r.result === 'win'; }).length;
+    const l = allPicks.filter((r) => { const g = r.games || r; return r.pick ? gradePick(r.pick, g) === 'loss' : r.result === 'loss'; }).length;
+    if (graded.length > 0) {
+      ctx.fillStyle = w >= l ? '#38bd94' : '#f87171';
+      ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.fillText(`${w}–${l}`, W - PADDING - 60, 38);
+    }
+    ctx.fillStyle = '#232838';
+    ctx.fillRect(0, HEADER_H - 10, W, 1);
+
+    let y = HEADER_H;
+
+    function drawRow(label, sublabel, result, isLock, isCustom) {
+      // Row bg
+      ctx.fillStyle = isLock ? 'rgba(251,191,36,0.08)' : isCustom ? 'rgba(148,163,184,0.04)' : 'rgba(56,189,148,0.04)';
+      ctx.fillRect(PADDING - 8, y, W - (PADDING - 8) * 2, ROW_H - 6);
+      // Left accent bar
+      ctx.fillStyle = isLock ? '#fbbf24' : isCustom ? '#4b5563' : '#38bd94';
+      ctx.fillRect(PADDING - 8, y, 3, ROW_H - 6);
+      // Label
+      ctx.fillStyle = isLock ? '#fbbf24' : '#e6e9ef';
+      ctx.font = `bold 14px -apple-system, BlinkMacSystemFont, sans-serif`;
+      ctx.fillText((isLock ? '🔒 ' : '') + label, PADDING + 4, y + 22);
+      // Sublabel
+      ctx.fillStyle = '#8a92a3';
+      ctx.font = '12px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.fillText(sublabel, PADDING + 4, y + 40);
+      // Result badge
+      if (result) {
+        const badgeColor = result === 'win' ? '#38bd94' : result === 'loss' ? '#f87171' : '#94a3b8';
+        ctx.fillStyle = badgeColor;
+        ctx.font = 'bold 12px -apple-system, BlinkMacSystemFont, sans-serif';
+        ctx.fillText(result.toUpperCase(), W - PADDING - 40, y + 26);
+      }
+      // Divider
+      ctx.fillStyle = '#1a1e2b';
+      ctx.fillRect(PADDING - 8, y + ROW_H - 6, W - (PADDING - 8) * 2, 1);
+      y += ROW_H;
+    }
+
+    // Lock first
+    if (lockRow) {
+      const g = lockRow;
+      const pickLabel = lockRow.pick?.pick_type === 'total'
+        ? `${lockRow.pick.side === 'over' ? 'Over' : 'Under'} ${lockRow.pick.line_played}`
+        : `${lockRow.pick.side === 'home' ? lockRow.home_team : lockRow.away_team} ${fmtLine(spreadForSide(lockRow.pick.line_played, lockRow.pick.side))}`;
+      const result = lockRow.status === 'final' ? gradePick(lockRow.pick, lockRow) : null;
+      drawRow(pickLabel, lockRow.matchup + ` · ${lockRow.pick.units}u`, result, true, false);
+    }
+
+    // Regular picks
+    for (const r of regularPicks) {
+      const pickLabel = r.pick?.pick_type === 'total'
+        ? `${r.pick.side === 'over' ? 'Over' : 'Under'} ${r.pick.line_played}`
+        : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`;
+      const result = r.status === 'final' ? gradePick(r.pick, r) : null;
+      drawRow(pickLabel, r.matchup + ` · ${r.pick.units}u`, result, false, false);
+    }
+
+    // Divider before custom plays
+    if (customPlays.length > 0 && regularPicks.length > 0) {
+      ctx.fillStyle = '#2a3042';
+      ctx.fillRect(PADDING, y + 8, W - PADDING * 2, 1);
+      ctx.fillStyle = '#5b6272';
+      ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.fillText('CUSTOM PLAYS', PADDING, y + 22);
+      y += 32;
+    }
+
+    // Custom plays
+    for (const cp of customPlays) {
+      const typeLabel = cp.custom_type ? cp.custom_type.charAt(0).toUpperCase() + cp.custom_type.slice(1) : 'Custom';
+      drawRow(cp.custom_label, `${typeLabel} · ${cp.units}u`, cp.result || null, false, true);
+    }
+
+    // Footer
+    ctx.fillStyle = '#2a3042';
+    ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.fillText('bobbymodels.app', PADDING, canvas.height / DPR - 14);
+
+    canvas.toBlob(async (blob) => {
+      const file = new File([blob], `bobby-week${week}-card.png`, { type: 'image/png' });
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: `BobbyModels Week ${week} Card` }); return; }
+        catch (e) { /* fallback to download */ }
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `bobby-week${week}-card.png`; a.click();
+      URL.revokeObjectURL(url);
+    }, 'image/png');
+  }
+
+  async function toggleLean(row) {
+    if (row.pick?.status === 'official') return;
+    if (row.pick?.status === 'lean') {
+      if (row.pick?.id) await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${row.pick.id}`, { method: 'DELETE', headers: SB_HEADERS });
+    } else {
+      const side = row.suggested_side || 'home';
+      // line_played is always the game's single stored line, same as PickModal.
+      const line = row.vegas_line != null ? parseFloat(row.vegas_line) : null;
+      await fetch(`${SUPABASE_URL}/rest/v1/user_picks`, {
+        method: 'POST',
+        headers: { ...SB_HEADERS, Prefer: 'return=representation' },
+        body: JSON.stringify({
+          game_id: row.id, game_metrics_id: row.game_metrics_id, played: true,
+          pick_type: 'spread', side, line_played: line, units: 1, status: 'lean',
+        }),
+      });
+    }
+    loadWeek();
+  }
+
+  const myCardPicksAll = useMemo(() => flat.filter((r) => r.pick?.status === 'official'), [flat]);
+  const myCardPicks = useMemo(() => {
+    let out = myCardPicksAll;
+    if (cardConfFilter !== 'All') out = out.filter((r) => r.confidence_bin === cardConfFilter);
+    if (cardTypeFilter !== 'All') out = out.filter((r) => r.pick.pick_type === cardTypeFilter);
+    return out;
+  }, [myCardPicksAll, cardConfFilter, cardTypeFilter]);
+
+  const lockPick = useMemo(() => flat.find((r) => r.pick?.is_lock), [flat]);
+
+  const lockRecord = useMemo(() => {
+    if (!lockHistory) return null;
+    let w = 0, l = 0, p = 0;
+    for (const lp of lockHistory) {
+      const g = lp.games;
+      const result = gradePick(lp, g);
+      if (result === 'win') w++;
+      else if (result === 'loss') l++;
+      else if (result === 'push') p++;
+    }
+    return { w, l, p, history: lockHistory };
+  }, [lockHistory]);
+
+  const seasonRecord = useMemo(() => {
+    if (!seasonPicks) return null;
+    let w = 0, l = 0, p = 0, unitsNet = 0;
+    let clvSum = 0, clvCount = 0;
+    for (const sp of seasonPicks) {
+      const g = sp.games;
+      const result = gradePick(sp, g);
+      if (result === 'win') { w++; unitsNet += sp.units || 1; }
+      else if (result === 'loss') { l++; unitsNet -= sp.units || 1; }
+      else if (result === 'push') { p++; }
+      const clv = computeCLV(sp, g);
+      if (clv !== null) { clvSum += clv; clvCount++; }
+    }
+    return { w, l, p, unitsNet, total: w + l + p, avgClv: clvCount ? clvSum / clvCount : null, clvCount };
+  }, [seasonPicks]);
+
+  return (
+    <div className="wrap">
+      <header>
+        <div className="header-top">
+          <div>
+            <h1>BobbyCFB — Weekly Dashboard</h1>
+            <p className="sub">Consensus spreads, edge &amp; qualification signals across all games</p>
+          </div>
+          <div className="header-actions no-print">
+            <button className="toggle-btn" onClick={() => setShowMyCard((v) => !v)}>
+              My Card {myCardPicksAll.length > 0 && <span className="count-badge">{myCardPicksAll.length}</span>}
+            </button>
+            <button
+              className="toggle-btn"
+              onClick={() => {
+                setShowSeasonStats((v) => !v);
+                if (!showSeasonStats && !seasonPicks) loadSeasonStats();
+              }}
+            >
+              Season Stats
+            </button>
+            <button className="toggle-btn" onClick={() => setShowCustomModal(true)}>
+              + Custom Play
+            </button>
+            <button className="toggle-btn print-btn" onClick={() => window.print()}>
+              🖨️ Print
+            </button>
+          </div>
+        </div>
+        <div className="print-header">
+          <div className="print-title">BobbyCFB — Week {week}, {season}</div>
+          <div className="print-sub">Generated {new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}</div>
+        </div>
+      </header>
+
+      {showMyCard && (
+        <div className="panel no-print">
+          <div className="panel-head">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <h2 style={{ margin: 0 }}>My Card — Week {week}</h2>
+              {myCardPicksAll.length > 0 && (
+                <button className="toggle-btn" onClick={shareCard} style={{ padding: '5px 12px', fontSize: 12 }}>
+                  📱 Share
+                </button>
+              )}
+            </div>
+            <div className="card-filters">
+              <select value={cardConfFilter} onChange={(e) => setCardConfFilter(e.target.value)}>
+                <option value="All">All confidence</option>
+                {CONFIDENCE_ORDER.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <select value={cardTypeFilter} onChange={(e) => setCardTypeFilter(e.target.value)}>
+                <option value="All">All bet types</option>
+                <option value="spread">Spread</option>
+                <option value="total">Total</option>
+              </select>
+            </div>
+          </div>
+          {myCardPicksAll.length === 0 ? (
+            <p className="empty-note">No official plays saved for this week yet. Click the + in the My Play column to add one.</p>
+          ) : (
+            <>
+              {/* BRLW Lock — shown at top of My Card if set */}
+              {lockPick && (
+                <div className="brlw-banner">
+                  <span className="brlw-label">🔒 Barney Rubble Lock of the Week</span>
+                  <span className="brlw-pick">
+                    {lockPick.pick.pick_type === 'total'
+                      ? `${lockPick.pick.side === 'over' ? 'Over' : 'Under'} ${lockPick.pick.line_played}`
+                      : `${lockPick.pick.side === 'home' ? lockPick.home_team : lockPick.away_team} ${fmtLine(spreadForSide(lockPick.pick.line_played, lockPick.pick.side))}`}
+                    {' '}· {lockPick.pick.units}u
+                  </span>
+                  <span className="brlw-matchup">{lockPick.matchup}</span>
+                  {(() => { const res = lockPick.status === 'final' ? gradePick(lockPick.pick, lockPick) : null; return res ? <span className={`result-badge ${res}`}>{res}</span> : null; })()}
+                </div>
+              )}
+              {myCardPicks.length === 0 ? (
+                <p className="empty-note">No plays match these filters.</p>
+              ) : (
+                <div className="card-list">
+                  {myCardPicks.map((r) => {
+                    const result = r.status === 'final' ? gradePick(r.pick, r) : null;
+                    const clv = computeCLV(r.pick, r);
+                    const label =
+                      r.pick.pick_type === 'total'
+                        ? `${r.pick.side === 'over' ? 'Over' : 'Under'} ${r.pick.line_played}`
+                        : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`;
+                    return (
+                      <div key={r.id} className={`card-item ${r.pick.is_lock ? 'card-item-lock' : ''}`}>
+                        <div>
+                          <div className="card-matchup">{r.pick.is_lock && '🔒 '}{r.matchup}</div>
+                          <div className="card-pick">{label} · {r.pick.units}u{clv !== null ? ` · CLV ${clv >= 0 ? '+' : ''}${clv.toFixed(1)}` : ''}</div>
+                        </div>
+                        {result && <span className={`result-badge ${result}`}>{result}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+          {/* Custom Plays section */}
+          {(customPlays.length > 0 || showMyCard) && (
+            <div style={{ marginTop: customPlays.length > 0 || myCardPicksAll.length > 0 ? 16 : 0, paddingTop: customPlays.length > 0 || myCardPicksAll.length > 0 ? 14 : 0, borderTop: customPlays.length > 0 || myCardPicksAll.length > 0 ? '1px solid #232838' : 'none' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', color: '#8a92a3' }}>
+                  Custom Plays {customPlays.length > 0 && <span className="count-badge">{customPlays.length}</span>}
+                </span>
+                <button className="toggle-btn" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => setShowCustomModal(true)}>+ Add</button>
+              </div>
+              {customPlays.length === 0 ? (
+                <p className="empty-note" style={{ margin: 0 }}>No custom plays this week. Use "+ Custom Play" to add a parlay, moneyline, or other bet.</p>
+              ) : (
+                <div className="card-list">
+                  {customPlays.map((cp) => {
+                    const typeLabel = cp.custom_type ? cp.custom_type.charAt(0).toUpperCase() + cp.custom_type.slice(1) : 'Custom';
+                    return (
+                      <div key={cp.id} className="card-item" style={{ gap: 8 }}>
+                        <div style={{ flex: 1 }}>
+                          <div className="card-matchup">{cp.custom_label}</div>
+                          <div className="card-pick">{typeLabel} · {cp.units}u</div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                          {['win','loss','push'].map((r) => (
+                            <button
+                              key={r}
+                              onClick={() => setCustomResult(cp.id, cp.result === r ? null : r)}
+                              style={{
+                                padding: '3px 8px', borderRadius: 12, border: '1px solid',
+                                fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                                background: cp.result === r ? (r === 'win' ? 'rgba(56,189,148,.2)' : r === 'loss' ? 'rgba(248,113,113,.2)' : 'rgba(148,163,184,.2)') : 'transparent',
+                                color: cp.result === r ? (r === 'win' ? '#38bd94' : r === 'loss' ? '#f87171' : '#94a3b8') : '#5b6272',
+                                borderColor: cp.result === r ? (r === 'win' ? 'rgba(56,189,148,.4)' : r === 'loss' ? 'rgba(248,113,113,.4)' : 'rgba(148,163,184,.4)') : '#2a3042',
+                                textTransform: 'uppercase',
+                              }}
+                            >{r}</button>
+                          ))}
+                          <button className="note-btn" onClick={() => deleteCustomPlay(cp.id)} title="Remove play" style={{ color: '#f87171', fontSize: 12 }}>✕</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {showSeasonStats && (
+        <div className="panel no-print">
+          <h2>Season Stats — {season}</h2>
+          {seasonLoading && <p className="empty-note">Loading…</p>}
+          {!seasonLoading && seasonRecord && (
+            <div className="stats-row">
+              <div className="stat"><span className="stat-num">{seasonRecord.w}-{seasonRecord.l}{seasonRecord.p ? `-${seasonRecord.p}` : ''}</span><span className="stat-label">Record</span></div>
+              <div className="stat"><span className="stat-num">{seasonRecord.total ? `${((seasonRecord.w / (seasonRecord.w + seasonRecord.l || 1)) * 100).toFixed(1)}%` : '—'}</span><span className="stat-label">Win %</span></div>
+              <div className="stat"><span className={`stat-num ${seasonRecord.unitsNet >= 0 ? 'pos' : 'neg'}`}>{seasonRecord.unitsNet >= 0 ? '+' : ''}{seasonRecord.unitsNet.toFixed(1)}u</span><span className="stat-label">Units (straight, no vig)</span></div>
+              <div className="stat"><span className="stat-num">{seasonRecord.total}</span><span className="stat-label">Graded Plays</span></div>
+              <div className="stat">
+                <span className={`stat-num ${seasonRecord.avgClv == null ? '' : seasonRecord.avgClv >= 0 ? 'pos' : 'neg'}`}>
+                  {seasonRecord.avgClv == null ? '—' : `${seasonRecord.avgClv >= 0 ? '+' : ''}${seasonRecord.avgClv.toFixed(2)}`}
+                </span>
+                <span className="stat-label">Avg CLV ({seasonRecord.clvCount} graded)</span>
+              </div>
+            </div>
+          )}
+          {!seasonLoading && seasonRecord && seasonRecord.total === 0 && (
+            <p className="empty-note">No graded official plays yet this season — results populate once games go final.</p>
+          )}
+
+          {/* BRLW History */}
+          {!seasonLoading && lockRecord && (
+            <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #232838' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
+                <h3 style={{ margin: 0, fontSize: 14, color: '#e6e9ef' }}>🔒 Barney Rubble Lock of the Week — All Time</h3>
+                <span className="stat-num" style={{ fontSize: 18, color: lockRecord.w >= lockRecord.l ? '#38bd94' : '#f87171' }}>
+                  {lockRecord.w}–{lockRecord.l}{lockRecord.p ? `–${lockRecord.p}` : ''}
+                </span>
+                {(lockRecord.w + lockRecord.l) > 0 && (
+                  <span className="stat-label" style={{ fontSize: 13, color: '#8a92a3' }}>
+                    {((lockRecord.w / (lockRecord.w + lockRecord.l)) * 100).toFixed(1)}% win rate
+                  </span>
+                )}
+              </div>
+              {lockRecord.history.length === 0 ? (
+                <p className="empty-note">No locks designated yet. Click 🔒 next to any official play to set it as the Barney Rubble Lock.</p>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead>
+                      <tr>
+                        {['Season', 'Wk', 'Matchup', 'Pick', 'Result'].map(h => (
+                          <th key={h} style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #232838', color: '#5b6272', textTransform: 'uppercase', fontSize: 11, letterSpacing: '.04em' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {lockRecord.history.map((lp) => {
+                        const g = lp.games;
+                        const result = g ? gradePick(lp, g) : null;
+                        const pickLabel = lp.pick_type === 'total'
+                          ? `${lp.side === 'over' ? 'Over' : 'Under'} ${lp.line_played}`
+                          : `${lp.side === 'home' ? g?.home_team : g?.away_team} ${fmtLine(spreadForSide(lp.line_played, lp.side))}`;
+                        const resultColor = result === 'win' ? '#38bd94' : result === 'loss' ? '#f87171' : '#94a3b8';
+                        return (
+                          <tr key={lp.id} style={{ borderBottom: '1px solid #1a1e2b' }}>
+                            <td style={{ padding: '7px 10px', color: '#8a92a3' }}>{g?.season ?? '—'}</td>
+                            <td style={{ padding: '7px 10px', color: '#8a92a3' }}>{g ? `Wk ${lp.games?.week ?? '?'}` : '—'}</td>
+                            <td style={{ padding: '7px 10px' }}>{g ? `${g.away_team} @ ${g.home_team}` : '—'}</td>
+                            <td style={{ padding: '7px 10px', fontWeight: 600 }}>{g ? pickLabel : '—'}</td>
+                            <td style={{ padding: '7px 10px' }}>
+                              {result
+                                ? <span className={`result-badge ${result}`}>{result}</span>
+                                : <span style={{ color: '#5b6272', fontSize: 11 }}>{g?.status === 'final' ? 'Push?' : 'Pending'}</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="controls no-print">
+        <div className="control">
+          <label>Season</label>
+          <input type="number" value={season} onChange={(e) => setSeason(parseInt(e.target.value || '0', 10))} />
+        </div>
+        <div className="control">
+          <label>Week</label>
+          <input type="number" value={week ?? ''} onChange={(e) => setWeek(parseInt(e.target.value || '0', 10))} />
+        </div>
+        <div className="control">
+          <label>Search team</label>
+          <input type="text" placeholder="e.g. Auburn" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        <div className="control">
+          <label>Confidence</label>
+          <select value={confFilter} onChange={(e) => setConfFilter(e.target.value)}>
+            <option>All</option>
+            {CONFIDENCE_ORDER.map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </div>
+        <div className="control">
+          <label>Min |Edge|</label>
+          <input type="number" step="0.5" placeholder="e.g. 1.5" value={minEdge} onChange={(e) => setMinEdge(e.target.value)} />
+        </div>
+        <div className="control">
+          <label>Min |Line Move|</label>
+          <input type="number" step="0.5" placeholder="e.g. 1.0" value={minMove} onChange={(e) => setMinMove(e.target.value)} />
+        </div>
+        <div className="control checkbox">
+          <label><input type="checkbox" checked={playOnly} onChange={(e) => setPlayOnly(e.target.checked)} />Model plays only</label>
+        </div>
+      </div>
+
+      {loading && <div className="status">Loading…</div>}
+      {error && <div className="status error">Error: {error}</div>}
+
+      {!loading && !error && (
+        <>
+          <div className="count no-print">{sorted.length} game{sorted.length === 1 ? '' : 's'}</div>
+          <div className="table-wrap screen-only-table">
+            <table>
+              <thead>
+                <tr>
+                  {COLUMNS.map((c) => (
+                    <th key={c.key} onClick={() => c.sortable && toggleSort(c.key)} className={`${c.sortable ? 'sortable' : ''} ${c.sticky ? 'sticky-col' : ''} ${['lean', 'play', 'notes'].includes(c.key) ? 'no-print' : ''}`}>
+                      {c.label}
+                      {TOOLTIPS[c.key] && <InfoIcon text={TOOLTIPS[c.key]} />}
+                      {sortKey === c.key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((r) => (
+                  <tr key={r.id} className={r.suggested_play ? 'play-row' : ''}>
+                    <td className="rank-cell">{rankByGameId[r.id]}</td>
+                    <td className={`matchup sticky-col ${r.suggested_play ? 'play-row' : ''}`}>
+                      <TeamLogo src={logos[r.away_team]} alt={r.away_team} />
+                      {r.away_team} @ <TeamLogo src={logos[r.home_team]} alt={r.home_team} />
+                      {r.home_team}
+                    </td>
+                    <td>{fmtKickoff(r.kickoff_at)}</td>
+                    <td>{fmtFavoredLine(r.vegas_line, r.home_team, r.away_team)}</td>
+                    <td className={r.line_move !== null && Math.abs(r.line_move) >= 0.5 ? (r.line_move > 0 ? 'move-up' : 'move-down') : 'dim'}>
+                      {r.line_move !== null ? `${r.line_move > 0 ? '▲ ' : r.line_move < 0 ? '▼ ' : ''}${Math.abs(r.line_move).toFixed(1)}` : '—'}
+                    </td>
+                    <td className={r.over_under == null ? 'dim' : ''}>{r.over_under ?? '—'}</td>
+                    <td>
+                      {(() => {
+                        const c = consensusPick(r);
+                        return c ? (
+                          <span className="consensus-cell">
+                            <TeamLogo src={logos[c.team]} alt={c.team} />
+                            {c.team} {fmtLine(fmt(c.num, 2))}
+                          </span>
+                        ) : '—';
+                      })()}
+                    </td>
+                    <td className={r.edge !== null && Math.abs(parseFloat(r.edge)) >= 1.5 ? 'strong' : ''}>{fmtLine(fmt(r.edge, 2))}</td>
+                    <td>{r.agreement !== null ? `${r.agree_side} ${fmt(r.agreement, 0)}% (${r.models_agreeing}/${r.actual_k})` : '—'}</td>
+                    <td>{r.agreement_all_pct !== null ? `${r.agree_side} ${fmt(r.agreement_all_pct, 0)}% (${r.agreement_all_count}/${r.agreement_all_total})` : '—'}</td>
+                    <td>{fmt(r.stddev, 2)}</td>
+                    <td>{fmt(r.range, 1)}</td>
+                    <td>{fmt(r.mss, 1)}</td>
+                    <td><span className={`badge ${(r.confidence_bin || '').replace(/\s+/g, '-').toLowerCase()}`}>{r.confidence_bin || '—'}</span></td>
+                    <td>
+                      {r.suggested_play ? (
+                        <span className="play-badge">{r.suggested_side === 'home' ? r.home_team : r.away_team} {fmtLine(fmt(spreadForSide(r.suggested_line, r.suggested_side), 1))}</span>
+                      ) : '—'}
+                    </td>
+                    <td>{r.valid_model_count ?? '—'}</td>
+                    <td className={r.tv_network == null ? 'dim' : ''}>{r.tv_network ?? '—'}</td>
+                    <td className="center no-print">
+                      <input
+                        type="checkbox"
+                        checked={r.pick?.status === 'lean'}
+                        disabled={r.pick?.status === 'official'}
+                        onChange={() => toggleLean(r)}
+                        title={r.pick?.status === 'official' ? 'Already an official play' : 'Mark as a lean'}
+                      />
+                    </td>
+                    <td className="center no-print">
+                      {r.pick?.status === 'official' ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'center' }}>
+                          <button className={`chip ${r.pick.is_lock ? 'chip-lock' : ''}`} onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}>
+                            {r.pick.is_lock && '🔒 '}
+                            {r.pick.pick_type === 'total'
+                              ? `${r.pick.side === 'over' ? 'O' : 'U'} ${r.pick.line_played}`
+                              : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`} {r.pick.units}u
+                          </button>
+                          <button
+                            className={`lock-toggle-btn ${r.pick.is_lock ? 'active' : ''}`}
+                            onClick={() => toggleLock(r)}
+                            title={r.pick.is_lock ? 'Remove as BRLW Lock' : 'Set as Barney Rubble Lock of the Week'}
+                          >🔒</button>
+                        </div>
+                      ) : (
+                        <button className="add-btn" onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}>+</button>
+                      )}
+                    </td>
+                    <td className="center no-print">
+                      <button className={`note-btn ${r.pick?.note ? 'has-note' : ''}`} onClick={() => setNoteModalGame(r)} title={r.pick?.note ? 'Edit note' : 'Add note'}>
+                        {r.pick?.note ? '📝' : '+'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {sorted.length === 0 && (
+                  <tr><td colSpan={COLUMNS.length} className="empty">No games match the current filters.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* ═══ MOBILE GAME CARDS ═══════════════════════════════════════ */}
+          <div className="mobile-game-list">
+
+            {/* Mobile toolbar — sort, filter, table toggle */}
+            <div className="mob-toolbar">
+              <div className="mob-toolbar-left">
+                <div className="mob-sort-wrap">
+                  <span className="mob-tool-label">Sort</span>
+                  <select
+                    className="mob-select"
+                    value={mobileSort}
+                    onChange={(e) => setMobileSort(e.target.value)}
+                  >
+                    <option value="mss">MSS</option>
+                    <option value="kickoff_at">Kickoff</option>
+                    <option value="edge">Edge</option>
+                    <option value="agreement">Agree %</option>
+                    <option value="vegas_line">Vegas Line</option>
+                    <option value="rank">Rank</option>
+                  </select>
+                </div>
+                <button
+                  className={`mob-filter-btn ${mobilePlaysOnly ? 'active' : ''}`}
+                  onClick={() => setMobilePlaysOnly((v) => !v)}
+                >
+                  🎯 My Plays{mobilePlaysOnly ? ' ✓' : ''}
+                </button>
+              </div>
+              <button
+                className="mob-table-btn"
+                onClick={() => setShowMobileTable((v) => !v)}
+              >
+                {showMobileTable ? '📋 Cards' : '📊 Table'}
+              </button>
+            </div>
+
+            {/* Optional full-table view on mobile */}
+            {showMobileTable && (
+              <div className="tbl-wrap-mobile">
+                <p style={{ fontSize: 11, color: '#5b6272', padding: '8px 12px 0', margin: 0 }}>
+                  Scroll horizontally to see all columns
+                </p>
+              </div>
+            )}
+
+            {/* Card list */}
+            {(() => {
+              // Apply mobile-specific sort and filter on top of the desktop sorted list
+              let mobileRows = [...sorted];
+              if (mobilePlaysOnly) mobileRows = mobileRows.filter((r) => r.pick?.status === 'official');
+              mobileRows.sort((a, b) => {
+                if (mobileSort === 'kickoff_at') {
+                  const at = a.kickoff_at ? new Date(a.kickoff_at).getTime() : Infinity;
+                  const bt = b.kickoff_at ? new Date(b.kickoff_at).getTime() : Infinity;
+                  return at - bt;
+                }
+                if (mobileSort === 'rank') return (rankByGameId[a.id] || 99) - (rankByGameId[b.id] || 99);
+                const av = a[mobileSort] != null ? parseFloat(a[mobileSort]) : -Infinity;
+                const bv = b[mobileSort] != null ? parseFloat(b[mobileSort]) : -Infinity;
+                return bv - av; // descending
+              });
+
+              if (mobileRows.length === 0) {
+                return <div className="empty">{mobilePlaysOnly ? 'No official plays this week yet.' : 'No games match the current filters.'}</div>;
+              }
+
+              return mobileRows.map((r) => {
+                const confClass = r.confidence_bin ? r.confidence_bin.toLowerCase().replace(' ', '-') : '';
+                const cp = consensusPick(r);
+                const hasMyPick = r.pick?.status === 'official';
+                const isLock = r.pick?.is_lock;
+                const awayLogo = logos[r.away_team];
+                const homeLogo = logos[r.home_team];
+
+                // Line move indicator
+                const moveVal = r.line_move;
+                const moveStr = moveVal != null && moveVal !== 0
+                  ? (moveVal > 0 ? `▲${Math.abs(moveVal).toFixed(1)}` : `▼${Math.abs(moveVal).toFixed(1)}`)
+                  : null;
+                const moveUp = moveVal != null && moveVal > 0;
+
+                // Vegas display: favored team + spread
+                const vegasNum = r.vegas_line != null ? parseFloat(r.vegas_line) : null;
+                const vegasFavTeam = vegasNum == null ? null : vegasNum > 0 ? r.home_team : vegasNum < 0 ? r.away_team : null;
+                const vegasSpread = vegasNum == null ? '—' : vegasNum === 0 ? "Pick'em" : `-${Math.abs(vegasNum).toFixed(1)}`;
+
+                return (
+                  <div
+                    key={r.id}
+                    className={[
+                      'mgame-card',
+                      r.suggested_play ? 'mgame-play' : '',
+                      isLock ? 'mgame-lock' : '',
+                      hasMyPick && !isLock ? 'mgame-picked' : '',
+                    ].filter(Boolean).join(' ')}
+                  >
+                    {/* ── Card header ──────────────────────────── */}
+                    <div className="mgame-header">
+                      <div className="mgame-rank-badge">#{rankByGameId[r.id]}</div>
+                      <div className="mgame-teams">
+                        <div className="mgame-team-row">
+                          {awayLogo && <img src={awayLogo} alt="" className="mgame-logo" onError={(e) => { e.currentTarget.style.display='none'; }} />}
+                          <span className="mgame-away-name">{r.away_team}</span>
+                          <span className="mgame-at-label">away</span>
+                        </div>
+                        <div className="mgame-team-row">
+                          {homeLogo && <img src={homeLogo} alt="" className="mgame-logo" onError={(e) => { e.currentTarget.style.display='none'; }} />}
+                          <span className="mgame-home-name">{r.home_team}</span>
+                          <span className="mgame-at-label">home</span>
+                        </div>
+                      </div>
+                      <span className={`badge ${confClass}`}>{r.confidence_bin ?? '—'}</span>
+                    </div>
+
+                    {/* ── Kickoff + TV ─────────────────────────── */}
+                    <div className="mgame-meta">
+                      <span>{fmtKickoff(r.kickoff_at)}</span>
+                      {r.tv_network && <span className="mgame-tv">{r.tv_network}</span>}
+                    </div>
+
+                    {/* ── Key metrics grid ─────────────────────── */}
+                    <div className="mgame-metrics">
+
+                      <div className="mgame-metric">
+                        <span className="mgame-metric-label">
+                          Vegas
+                          <MobInfoIcon text="Current market spread. Arrow shows line movement since open." />
+                        </span>
+                        <span className="mgame-metric-val">
+                          {vegasFavTeam ? (
+                            <>{vegasFavTeam} {vegasSpread}</>
+                          ) : '—'}
+                          {moveStr && (
+                            <span className={`mob-move ${moveUp ? 'up' : 'down'}`}> {moveStr}</span>
+                          )}
+                        </span>
+                      </div>
+
+                      {r.over_under != null && (
+                        <div className="mgame-metric">
+                          <span className="mgame-metric-label">
+                            O/U
+                            <MobInfoIcon text="Market total — combined predicted points for both teams." />
+                          </span>
+                          <span className="mgame-metric-val">{r.over_under}</span>
+                        </div>
+                      )}
+
+                      <div className="mgame-metric">
+                        <span className="mgame-metric-label">
+                          Consensus
+                          <MobInfoIcon text="The model's predicted side and spread in standard sportsbook notation. Same direction as the Edge." />
+                        </span>
+                        <span className={`mgame-metric-val ${cp ? 'strong' : ''}`}>
+                          {cp ? `${cp.team} ${fmtLine(fmt(cp.num, 1))}` : '—'}
+                        </span>
+                      </div>
+
+                      <div className="mgame-metric">
+                        <span className="mgame-metric-label">
+                          Edge
+                          <MobInfoIcon text="Consensus minus Vegas line — the core signal. Green means the model strongly disagrees with the market." />
+                        </span>
+                        <span className={`mgame-metric-val ${r.edge !== null && Math.abs(parseFloat(r.edge)) >= 1.5 ? 'strong' : ''}`}>
+                          {r.edge != null ? fmtLine(parseFloat(r.edge).toFixed(1)) : '—'}
+                        </span>
+                      </div>
+
+                      <div className="mgame-metric">
+                        <span className="mgame-metric-label">
+                          Agree%
+                          <MobInfoIcon text="Fraction of Top-K models on the same side as the edge. ≥85% is the qualification threshold." />
+                        </span>
+                        <span className={`mgame-metric-val ${r.agreement != null && r.agreement >= 85 ? 'strong' : ''}`}>
+                          {r.agreement != null ? `${fmt(r.agreement, 0)}%` : '—'}
+                        </span>
+                      </div>
+
+                      <div className="mgame-metric">
+                        <span className="mgame-metric-label">
+                          StdDev
+                          <MobInfoIcon text="Spread of predictions across models. ≤2.5 is the qualification threshold — lower is tighter consensus." />
+                        </span>
+                        <span className={`mgame-metric-val ${r.stddev != null && parseFloat(r.stddev) <= 2.5 ? 'strong' : ''}`}>
+                          {fmt(r.stddev, 2)}
+                        </span>
+                      </div>
+
+                      <div className="mgame-metric">
+                        <span className="mgame-metric-label">
+                          MSS
+                          <MobInfoIcon text="Model Strength Score — composite of edge, agreement, and variance. Higher means a stronger, more reliable signal." />
+                        </span>
+                        <span className="mgame-metric-val">{fmt(r.mss, 1)}</span>
+                      </div>
+
+                    </div>
+
+                    {/* ── Model play banner ────────────────────── */}
+                    {r.suggested_play && cp && (
+                      <div className="mgame-model-play">
+                        <span className="mgame-model-star">★ MODEL PLAY</span>
+                        <span className="mgame-model-pick">{cp.team} {fmtLine(fmt(cp.num, 1))}</span>
+                      </div>
+                    )}
+
+                    {/* ── My Play section ──────────────────────── */}
+                    <div className="mgame-my-play">
+                      <div className="mgame-my-play-label">MY PLAY</div>
+                      {hasMyPick ? (
+                        <div className="mgame-my-play-content">
+                          <div className="mgame-my-play-row">
+                            {isLock && <span className="mgame-lock-tag">🔒 BRLW</span>}
+                            <button
+                              className={`chip ${isLock ? 'chip-lock' : ''}`}
+                              onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}
+                            >
+                              {r.pick.pick_type === 'total'
+                                ? `${r.pick.side === 'over' ? 'Over' : 'Under'} ${r.pick.line_played}`
+                                : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`}
+                              {' · '}{r.pick.units}u
+                            </button>
+                          </div>
+                          <div className="mgame-my-play-actions">
+                            <button
+                              className={`lock-toggle-btn ${isLock ? 'active' : ''}`}
+                              onClick={() => toggleLock(r)}
+                              title={isLock ? 'Remove BRLW Lock' : 'Set as Barney Rubble Lock'}
+                            >🔒</button>
+                            <button
+                              className={`note-btn ${r.pick?.note ? 'has-note' : ''}`}
+                              onClick={() => setNoteModalGame(r)}
+                              title={r.pick?.note ? 'Edit note' : 'Add note'}
+                            >{r.pick?.note ? '📝' : '📓'}</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mgame-my-play-empty">
+                          <button
+                            className="mob-add-play-btn"
+                            onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}
+                          >+ Add Play</button>
+                          <label className="mob-lean-label">
+                            <input
+                              type="checkbox"
+                              checked={r.pick?.status === 'lean'}
+                              onChange={() => toggleLean(r)}
+                            />
+                            Lean
+                          </label>
+                        </div>
+                      )}
+                    </div>
+
+                  </div>
+                );
+              });
+            })()}
+          </div>
+
+          <div className="print-only-cards">
+            {printSorted.map((r) => {
+              const marketFav = fmtFavoredLine(r.vegas_line, r.home_team, r.away_team);
+              const c = consensusPick(r);
+              const edgeAbs = r.edge != null ? Math.abs(parseFloat(r.edge)) : null;
+              return (
+                <div key={r.id} className={`gcard gcard-${(r.confidence_bin || 'very-weak').toLowerCase().replace(/\s+/g, '-')} ${r.suggested_play ? 'gcard-play' : ''} ${r.pick?.status === 'official' ? 'gcard-mine' : ''}`}>
+                  <div className="gc-top">
+                    <span className="gc-rank">#{rankByGameId[r.id]}</span>
+                    <span className="gc-time">{fmtKickoffPrint(r.kickoff_at)}</span>
+                    <span className="gc-tv">{r.tv_network ?? ''}</span>
+                  </div>
+                  <div className="gc-matchup">
+                    <TeamLogo src={logos[r.away_team]} alt={r.away_team} />
+                    {r.away_team} @ {r.home_team}
+                    <TeamLogo src={logos[r.home_team]} alt={r.home_team} />
+                  </div>
+                  <div className="gc-line">
+                    Market: <b>{marketFav}</b> &nbsp;·&nbsp; O/U {r.over_under ?? '—'}
+                    {r.line_move !== null && Math.abs(r.line_move) >= 0.5 && (
+                      <span className={r.line_move > 0 ? 'gc-up' : 'gc-down'}>
+                        {' '}({r.line_move > 0 ? '▲' : '▼'}{Math.abs(r.line_move).toFixed(1)} since open)
+                      </span>
+                    )}
+                  </div>
+                  {c && (
+                    <div className="gc-story">
+                      Model likes <TeamLogo src={logos[c.team]} alt={c.team} /><b>{c.team} {fmtLine(fmt(c.num, 1))}</b>
+                      <span className={edgeAbs !== null && edgeAbs >= 1.5 ? 'gc-edge-strong' : 'gc-edge'}> (edge {fmtLine(fmt(r.edge, 1))})</span>.
+                      {r.agreement !== null && ` ${fmt(r.agreement, 0)}% of top-7 agree`}
+                      {r.agreement_all_pct !== null && ` (${fmt(r.agreement_all_pct, 0)}% of all ${r.valid_model_count}).`}
+                    </div>
+                  )}
+                  <div className="gc-stats">
+                    StdDev {fmt(r.stddev, 1)} · Range {fmt(r.range, 1)} · MSS {fmt(r.mss, 1)} · <span className="gc-conf">{r.confidence_bin || '—'}</span>
+                  </div>
+                  {r.suggested_play && (
+                    <div className="gc-badge">★ MODEL PLAY: {r.suggested_side === 'home' ? r.home_team : r.away_team} {fmtLine(fmt(spreadForSide(r.suggested_line, r.suggested_side), 1))}</div>
+                  )}
+                  {r.pick?.status === 'official' && (
+                    <div className="gc-badge gc-badge-mine">
+                      ⚑ MY PLAY: {r.pick.pick_type === 'total'
+                        ? `${r.pick.side === 'over' ? 'Over' : 'Under'} ${r.pick.line_played}`
+                        : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`} ({r.pick.units}u)
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {showCustomModal && (
+        <CustomPlayModal
+          season={season}
+          week={week}
+          onClose={() => setShowCustomModal(false)}
+          onSaved={() => { setShowCustomModal(false); loadWeek(); }}
+        />
+      )}
+      {pickModalGame && (
+        <PickModal
+          game={pickModalGame}
+          existing={pickModalGame.pick}
+          defaultStatus={pickModalDefaultStatus}
+          onClose={() => setPickModalGame(null)}
+          onSaved={refreshAfterPickChange}
+          onDeleted={refreshAfterPickChange}
+        />
+      )}
+
+      {noteModalGame && (
+        <NoteModal
+          game={noteModalGame}
+          existing={noteModalGame.pick}
+          onClose={() => setNoteModalGame(null)}
+          onSaved={() => { setNoteModalGame(null); loadWeek(); }}
+        />
+      )}
+
+      <style jsx global>{`
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #0b0e14; color: #e6e9ef; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .tooltip-fixed {
+          position: fixed; transform: translateX(-50%); width: 220px; background: #1a1e2b;
+          border: 1px solid #2a3042; color: #d3d8e2; font-size: 11px; font-weight: 400;
+          line-height: 1.5; padding: 8px 10px; border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+          z-index: 1000; white-space: normal; pointer-events: none;
+        }
+        .team-logo { width: 16px; height: 16px; object-fit: contain; vertical-align: middle; margin: 0 4px; }
+        .consensus-cell { display: inline-flex; align-items: center; gap: 2px; }
+        .print-header { display: none; }
+        .print-only-cards { display: none; }
+        @media print {
+          @page { size: landscape; margin: 8mm; }
+          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+          .no-print, .info-icon { display: none !important; }
+          body { background: #fff !important; color: #000 !important; }
+          .wrap { max-width: 100% !important; padding: 0 !important; }
+          .print-header { display: block !important; margin-bottom: 8px; }
+          .print-title { font-size: 16px; font-weight: 700; color: #000; }
+          .print-sub { font-size: 9px; color: #555; margin-top: 1px; }
+          .screen-only-table { display: none !important; }
+          .print-only-cards {
+            display: grid !important;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+          }
+          .gcard {
+            border: 1px solid #ccc; border-left: 3px solid #bbb; border-radius: 3px; padding: 5px 7px;
+            break-inside: avoid; color: #000; background: #fff;
+          }
+          .gcard-very-strong { border-left-color: #059669; }
+          .gcard-strong { border-left-color: #10b981; }
+          .gcard-moderate { border-left-color: #d97706; }
+          .gcard-weak { border-left-color: #94a3b8; }
+          .gcard-very-weak { border-left-color: #d1d5db; }
+          .gcard-play { border: 1px solid #059669; border-left: 3px solid #059669; background: #ecfdf5; }
+          .gcard-mine { box-shadow: inset 0 0 0 1px #2563eb; }
+          .gc-top {
+            display: flex; justify-content: space-between; align-items: baseline;
+            font-size: 7.5px; color: #666; margin-bottom: 2px;
+          }
+          .gc-rank { font-weight: 700; color: #000; }
+          .gc-matchup {
+            font-size: 11px; font-weight: 700; margin-bottom: 2px;
+            display: flex; align-items: center; gap: 3px;
+          }
+          .gc-line { font-size: 8.5px; margin-bottom: 3px; color: #333; }
+          .gc-up { color: #059669; }
+          .gc-down { color: #dc2626; }
+          .gc-story { font-size: 8px; line-height: 1.35; margin-bottom: 3px; color: #222; }
+          .gc-edge { color: #444; }
+          .gc-edge-strong { color: #059669; font-weight: 700; }
+          .gc-stats { font-size: 7.5px; color: #555; margin-bottom: 2px; }
+          .gc-conf { font-weight: 700; }
+          .gcard-very-strong .gc-conf, .gcard-strong .gc-conf { color: #059669; }
+          .gcard-moderate .gc-conf { color: #b45309; }
+          .gcard-weak .gc-conf, .gcard-very-weak .gc-conf { color: #6b7280; }
+          .gc-badge {
+            font-size: 8.5px; font-weight: 700; border-radius: 3px;
+            padding: 2px 5px; margin-top: 3px; display: inline-block;
+            border: 1px solid #059669; background: #d1fae5; color: #065f46;
+          }
+          .gc-badge-mine { border: 1px solid #2563eb; background: #dbeafe; color: #1e3a8a; margin-left: 4px; }
+        }
+      `}</style>
+      <style jsx>{`
+        .wrap { max-width: 1600px; margin: 0 auto; padding: 32px 20px 60px; }
+        .header-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+        header h1 { font-size: 26px; margin: 0 0 4px; font-weight: 700; }
+        .sub { color: #8a92a3; margin: 0 0 24px; font-size: 14px; }
+        .header-actions { display: flex; gap: 8px; }
+        .toggle-btn { background: #131722; border: 1px solid #2a3042; color: #e6e9ef; padding: 8px 14px; border-radius: 8px; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+        .toggle-btn:hover { border-color: #38bd94; }
+        .print-btn { }
+        .count-badge { background: #38bd94; color: #0b0e14; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 10px; }
+        .panel { background: #131722; border: 1px solid #232838; border-radius: 10px; padding: 16px 20px; margin-bottom: 16px; }
+        .panel-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .panel h2 { font-size: 15px; margin: 0; }
+        .card-filters { display: flex; gap: 8px; }
+        .card-filters select { background: #0b0e14; border: 1px solid #2a3042; color: #e6e9ef; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
+        .empty-note { color: #5b6272; font-size: 13px; margin: 0; }
+        .card-list { display: flex; flex-direction: column; gap: 8px; }
+        .card-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #0b0e14; border-radius: 8px; border: 1px solid #1a1e2b; }
+        .card-matchup { font-size: 13px; font-weight: 600; }
+        .card-pick { font-size: 12px; color: #8a92a3; margin-top: 2px; }
+        .result-badge { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px; text-transform: uppercase; }
+        .result-badge.win { background: rgba(56,189,148,0.15); color: #38bd94; }
+        .result-badge.loss { background: rgba(248,113,113,0.15); color: #f87171; }
+        .result-badge.push { background: rgba(148,163,184,0.15); color: #94a3b8; }
+        .stats-row { display: flex; gap: 28px; flex-wrap: wrap; }
+        .stat { display: flex; flex-direction: column; gap: 2px; }
+        .stat-num { font-size: 22px; font-weight: 700; }
+        .stat-num.pos { color: #38bd94; }
+        .stat-num.neg { color: #f87171; }
+        .stat-label { font-size: 11px; color: #8a92a3; text-transform: uppercase; letter-spacing: 0.04em; }
+        .controls { display: flex; flex-wrap: wrap; gap: 16px; background: #131722; border: 1px solid #232838; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+        .control { display: flex; flex-direction: column; gap: 4px; }
+        .control.checkbox { justify-content: flex-end; }
+        .control label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #8a92a3; }
+        .control input[type='text'], .control input[type='number'], .control select { background: #0b0e14; border: 1px solid #2a3042; color: #e6e9ef; padding: 7px 10px; border-radius: 6px; font-size: 14px; width: 110px; }
+        .control input[type='text'] { width: 160px; }
+        .control.checkbox label { text-transform: none; font-size: 14px; color: #e6e9ef; display: flex; align-items: center; gap: 6px; padding-bottom: 7px; }
+        .status { padding: 40px 0; text-align: center; color: #8a92a3; }
+        .status.error { color: #f87171; }
+        .count { color: #8a92a3; font-size: 13px; margin-bottom: 8px; }
+        .table-wrap { overflow-x: auto; border: 1px solid #232838; border-radius: 10px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
+        thead th { text-align: left; padding: 10px 12px; background: #131722; border-bottom: 1px solid #232838; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #8a92a3; }
+        th.sortable { cursor: pointer; user-select: none; }
+        th.sortable:hover { color: #e6e9ef; }
+        th.sticky-col { position: sticky; left: 0; z-index: 3; background: #131722; box-shadow: 3px 0 6px rgba(0,0,0,0.5); }
+        td.sticky-col { position: sticky; left: 0; z-index: 2; background: #0b0e14; box-shadow: 3px 0 6px rgba(0,0,0,0.5); }
+        td.sticky-col.play-row-bg { background: #0d1710; }
+        tbody td { padding: 9px 12px; border-bottom: 1px solid #1a1e2b; }
+        td.center { text-align: center; }
+        tbody tr:hover td { background: #131722; }
+        tbody tr:hover td.sticky-col { background: #1a1e2b; }
+        tr.play-row:hover td.sticky-col { background: #0f1e18; }
+        tr.play-row { background: rgba(56, 189, 148, 0.06); }
+        tr.play-row:hover { background: rgba(56, 189, 148, 0.12); }
+        td.matchup { font-weight: 600; }
+        td.dim { color: #5b6272; }
+        td.strong { color: #38bd94; font-weight: 700; }
+        .move { font-size: 11px; margin-left: 4px; }
+        .move.up { color: #38bd94; }
+        .move.down { color: #f87171; }
+        .rank-cell { font-weight: 700; color: #8a92a3; text-align: center; }
+        .move-up { color: #38bd94; }
+        .move-down { color: #f87171; }
+        .badge { padding: 3px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; background: #232838; color: #b8bfcc; }
+        .badge.very-strong { background: rgba(56, 189, 148, 0.18); color: #38bd94; }
+        .badge.strong { background: rgba(56, 189, 148, 0.12); color: #38bd94; }
+        .badge.moderate { background: rgba(250, 204, 21, 0.14); color: #facc15; }
+        .badge.weak { background: rgba(148, 163, 184, 0.14); color: #94a3b8; }
+        .badge.very-weak { background: rgba(148, 163, 184, 0.08); color: #6b7280; }
+        .play-badge { background: rgba(56, 189, 148, 0.14); color: #38bd94; padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 12px; }
+        .empty { text-align: center; color: #5b6272; padding: 30px !important; }
+        .add-btn { width: 26px; height: 26px; border-radius: 6px; border: 1px dashed #2a3042; background: transparent; color: #8a92a3; cursor: pointer; font-size: 14px; }
+        .add-btn:hover { border-color: #38bd94; color: #38bd94; }
+        .chip { background: rgba(56,189,148,0.12); color: #38bd94; border: 1px solid rgba(56,189,148,0.3); border-radius: 6px; padding: 4px 8px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+        .note-btn { width: 26px; height: 26px; border-radius: 6px; border: 1px solid transparent; background: transparent; cursor: pointer; font-size: 13px; color: #5b6272; }
+        .note-btn.has-note { color: #facc15; }
+        .note-btn:hover { border-color: #2a3042; }
+        .lock-toggle-btn { width: 22px; height: 22px; border-radius: 4px; border: 1px solid transparent; background: transparent; cursor: pointer; font-size: 12px; opacity: 0.25; transition: opacity .15s, background .15s; padding: 0; line-height: 1; }
+        .lock-toggle-btn:hover { opacity: 0.7; background: rgba(251,191,36,0.1); }
+        .lock-toggle-btn.active { opacity: 1; background: rgba(251,191,36,0.15); border-color: rgba(251,191,36,0.4); }
+        .chip-lock { background: rgba(251,191,36,0.15); color: #fbbf24; border: 1px solid rgba(251,191,36,0.35); }
+        .card-item-lock { border-color: rgba(251,191,36,0.3) !important; background: rgba(251,191,36,0.05) !important; }
+        .brlw-banner { display: flex; align-items: center; gap: 12px; background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.3); border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; flex-wrap: wrap; }
+        .brlw-label { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: #fbbf24; white-space: nowrap; }
+        .brlw-pick { font-size: 14px; font-weight: 700; color: #fbbf24; }
+        .brlw-matchup { font-size: 12px; color: #8a92a3; }
+
+        /* ── Mobile game cards ─────────────────────────────────────── */
+        .mobile-game-list { display: none; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+
+        /* Toolbar */
+        .mob-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: #131722; border: 1px solid #1e2535; border-radius: 10px; padding: 10px 12px; margin-bottom: 4px; }
+        .mob-toolbar-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .mob-tool-label { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #5b6272; font-weight: 700; }
+        .mob-select { background: #0b0e14; border: 1px solid #2a3042; color: #e6e9ef; padding: 5px 8px; border-radius: 6px; font-size: 12px; font-family: inherit; }
+        .mob-sort-wrap { display: flex; align-items: center; gap: 6px; }
+        .mob-filter-btn { background: #0b0e14; border: 1px solid #2a3042; color: #8a92a3; padding: 5px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+        .mob-filter-btn.active { background: rgba(56,189,148,.15); border-color: rgba(56,189,148,.4); color: #38bd94; }
+        .mob-table-btn { background: #0b0e14; border: 1px solid #2a3042; color: #8a92a3; padding: 5px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+        .mob-table-btn:hover { border-color: #38bd94; color: #38bd94; }
+
+        /* Cards */
+        .mgame-card { background: #131722; border: 1px solid #1e2535; border-radius: 12px; padding: 14px; }
+        .mgame-play { border-color: rgba(56,189,148,.35); background: rgba(56,189,148,.04); }
+        .mgame-lock { border-color: rgba(251,191,36,.4); background: rgba(251,191,36,.04); }
+        .mgame-picked { border-color: rgba(37,99,235,.35); }
+
+        /* Header */
+        .mgame-header { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
+        .mgame-rank-badge { background: #0b0e14; border: 1px solid #2a3042; border-radius: 6px; padding: 2px 6px; font-size: 10px; font-weight: 800; color: #8a92a3; white-space: nowrap; margin-top: 2px; flex-shrink: 0; }
+        .mgame-teams { flex: 1; }
+        .mgame-team-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+        .mgame-logo { width: 18px; height: 18px; object-fit: contain; flex-shrink: 0; }
+        .mgame-away-name { font-size: 15px; font-weight: 800; color: #e6e9ef; line-height: 1.1; }
+        .mgame-home-name { font-size: 13px; font-weight: 600; color: #b8bfcc; line-height: 1.1; }
+        .mgame-at-label { font-size: 9px; color: #3a404e; text-transform: uppercase; font-weight: 700; margin-left: 2px; }
+
+        /* Meta */
+        .mgame-meta { font-size: 11px; color: #5b6272; margin-bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+        .mgame-tv { background: #0b0e14; border: 1px solid #2a3042; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: 700; color: #8a92a3; }
+
+        /* Metrics grid */
+        .mgame-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 8px; margin-bottom: 12px; padding: 10px 0; border-top: 1px solid #1e2535; border-bottom: 1px solid #1e2535; }
+        .mgame-metric { display: flex; flex-direction: column; gap: 3px; }
+        .mgame-metric-label { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: #5b6272; font-weight: 700; display: flex; align-items: center; gap: 2px; }
+        .mgame-metric-val { font-size: 13px; font-weight: 700; color: #e6e9ef; line-height: 1.2; }
+        .mgame-metric-val.strong { color: #38bd94; }
+        .mob-move { font-size: 10px; font-weight: 700; }
+        .mob-move.up { color: #38bd94; }
+        .mob-move.down { color: #f87171; }
+
+        /* Model play banner */
+        .mgame-model-play { display: flex; align-items: center; gap: 8px; background: rgba(56,189,148,.1); border: 1px solid rgba(56,189,148,.25); border-radius: 8px; padding: 7px 10px; margin-bottom: 10px; }
+        .mgame-model-star { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: #38bd94; white-space: nowrap; }
+        .mgame-model-pick { font-size: 13px; font-weight: 800; color: #38bd94; }
+
+        /* My Play section */
+        .mgame-my-play { border-top: 1px solid #1e2535; padding-top: 10px; margin-top: 2px; }
+        .mgame-my-play-label { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: #3a404e; margin-bottom: 6px; }
+        .mgame-my-play-content { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .mgame-my-play-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .mgame-lock-tag { font-size: 10px; font-weight: 800; color: #fbbf24; white-space: nowrap; }
+        .mgame-my-play-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+        .mgame-my-play-empty { display: flex; align-items: center; gap: 10px; }
+        .mob-add-play-btn { background: transparent; border: 1px dashed #2a3042; color: #8a92a3; border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+        .mob-add-play-btn:hover { border-color: #38bd94; color: #38bd94; }
+        .mob-lean-label { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #5b6272; cursor: pointer; }
+        .mgame-metric-val { font-size: 13px; font-weight: 700; color: #e6e9ef; }
+        .mgame-metric-val.strong { color: #38bd94; }
+        .mgame-play-badge { font-size: 12px; font-weight: 700; color: #38bd94; background: rgba(56,189,148,.1); border: 1px solid rgba(56,189,148,.25); border-radius: 6px; padding: 5px 10px; margin-bottom: 10px; }
+        .mgame-actions { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding-top: 10px; border-top: 1px solid #1e2535; }
+
+        /* ── Responsive breakpoints ────────────────────────────────── */
+        @media (max-width: 768px) {
+          .wrap { padding: 12px 12px 60px; }
+          header h1 { font-size: 20px; }
+          .sub { font-size: 12px; margin-bottom: 14px; }
+          .header-actions { gap: 6px; flex-wrap: wrap; }
+          .toggle-btn { padding: 7px 10px; font-size: 12px; }
+          .controls { gap: 10px; padding: 12px; }
+          .control input[type='text'], .control input[type='number'], .control select { width: 90px; font-size: 13px; }
+          .control input[type='text'] { width: 130px; }
+          .panel { padding: 12px 14px; }
+          .stats-row { gap: 16px; }
+          .stat-num { font-size: 18px; }
+          /* Hide desktop table, show mobile cards */
+          .table-wrap { display: none; }
+          .mobile-game-list { display: flex; }
+        }
+        @media (max-width: 480px) {
+          .header-top { gap: 10px; }
+          header h1 { font-size: 17px; }
+          .toggle-btn { padding: 6px 8px; font-size: 11px; }
+          .mgame-metrics { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+          .mgame-metric-val { font-size: 12px; }
+        }
+      `}</style>
+    </div>
+  );
+}
