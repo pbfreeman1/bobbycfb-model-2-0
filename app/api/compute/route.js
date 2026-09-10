@@ -38,11 +38,22 @@ export async function POST(req) {
   );
 
   try {
-    // 1. Get ranked models for this season (use prior seasons)
-    // Use the most recent recalibration at or before this week (week 1 falls back
-    // to the pre-season 2021-2025 backtest baseline; later weeks pick up whatever
-    // /api/recalibrate has written since). Without this, every as_of_week snapshot
-    // for the season would be selected together and rank/topK would be meaningless.
+    // 1. Load the set of model IDs that must never enter the Top-K pool:
+    //    status = 'exclude' (derived aggregates like lineavg, lineca, linestd,
+    //    linemidweek etc.), 'meta' (Massey Consensus — a meta-aggregate),
+    //    and 'verify' (archive-only unconfirmed systems).
+    //    This runs first so the Top-K slice below only counts eligible models.
+    const { data: ineligible, error: inErr } = await supabase
+      .from('source_models')
+      .select('id')
+      .in('status', ['exclude', 'meta', 'verify']);
+    if (inErr) throw new Error(`source_models: ${inErr.message}`);
+    const ineligibleIds = new Set((ineligible || []).map(r => r.id));
+
+    // 2. Get the most recent model_grades snapshot at or before this week.
+    //    Week 1 uses the as_of_week=1 pre-season baseline (pure 2021-2025 history).
+    //    Week 2+ uses the blended snapshot produced by /api/recalibrate after the
+    //    prior week's games were graded (80% current-season / 20% historical).
     const { data: weeks, error: wkErr } = await supabase
       .from('model_grades')
       .select('as_of_week')
@@ -54,7 +65,7 @@ export async function POST(req) {
     if (!weeks.length) throw new Error(`No model_grades snapshot found for season ${season} at or before week ${week}`);
     const snapshotWeek = weeks[0].as_of_week;
 
-    const { data: grades, error: grErr } = await supabase
+    const { data: allGrades, error: grErr } = await supabase
       .from('model_grades')
       .select('model_id, rank, shrunk_ats_pct')
       .eq('as_of_season', season)
@@ -62,14 +73,17 @@ export async function POST(req) {
       .order('rank', { ascending: true });
     if (grErr) throw new Error(`grades: ${grErr.message}`);
 
-    // Top-K model IDs and weights
-    const topK = grades.slice(0, TOP_K);
+    // Filter out ineligible models BEFORE slicing to Top-K.
+    // Without this, excluded systems (e.g. linemidweek at rank 3, lineround at
+    // rank 7) consume Top-K slots, leaving only 5 usable models instead of 7.
+    const eligibleGrades = allGrades.filter(g => !ineligibleIds.has(g.model_id));
+    const topK = eligibleGrades.slice(0, TOP_K);
     const topIds = topK.map(g => g.model_id);
     const rawWeights = topK.map(g => Math.max(0.001, (g.shrunk_ats_pct || 0.5) - 0.5));
     const sumW = rawWeights.reduce((a, b) => a + b, 0);
     const weights = sumW > 0 ? rawWeights.map(w => w / sumW) : rawWeights.map(() => 1 / TOP_K);
 
-    // 2. Get games for this week
+    // 3. Get games for this week
     const { data: games, error: gErr } = await supabase
       .from('games')
       .select('id, current_line')
@@ -77,7 +91,7 @@ export async function POST(req) {
       .eq('week', week);
     if (gErr) throw new Error(`games: ${gErr.message}`);
 
-    // 3. Get raw predictions
+    // 4. Get raw predictions for the top-K models
     const gameIds = games.map(g => g.id);
     const { data: preds, error: pErr } = await supabase
       .from('raw_predictions')
@@ -175,7 +189,13 @@ export async function POST(req) {
       else if (!firstError) { firstError = uErr.message; }
     }
 
-    return Response.json({ games: metricsInserted, plays, snapshot_week: snapshotWeek, ...(firstError ? { warning: `Some rows failed to upsert, e.g.: ${firstError}` } : {}) });
+    return Response.json({
+      games: metricsInserted,
+      plays,
+      snapshot_week: snapshotWeek,
+      top_k_models: topIds.length,
+      ...(firstError ? { warning: `Some rows failed to upsert, e.g.: ${firstError}` } : {}),
+    });
   } catch (e) {
     return Response.json({ error: e.message }, { status: 500 });
   }
