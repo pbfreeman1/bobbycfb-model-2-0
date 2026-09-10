@@ -13,6 +13,7 @@ export default function MyCard() {
   const [week, setWeek] = useState(null); // resolved to the latest week with games below
   const [picks, setPicks] = useState([]);
   const [games, setGames] = useState([]);
+  const [pssGames, setPssGames] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -31,14 +32,27 @@ export default function MyCard() {
   const load = async () => {
     setLoading(true); setError(null);
     try {
-      const [pData, gData, lockData] = await Promise.all([
+      const [pData, gData, lockData, pssPData, pssGData, pssLockData] = await Promise.all([
         sbFetch(`user_picks?select=*,games(home_team,away_team,kickoff_at,current_line,over_under,game_metrics(consensus_spread,edge,mss,confidence_bin,suggested_side,suggested_line))&season=eq.${season}&week=eq.${week}&order=created_at.asc`),
         sbFetch(`games?select=id,home_team,away_team,kickoff_at,current_line,game_metrics(suggested_side,suggested_line,consensus_spread,edge,mss)&season=eq.${season}&week=eq.${week}&order=home_team.asc`),
         sbFetch(`user_picks?select=*,games(home_team,away_team)&is_lock=eq.true&order=created_at.desc&limit=20`),
+        // BobbyPSSModel — separate table, merged into the same consolidated card below.
+        sbFetch(`pss_user_picks?select=*,games(home_team,away_team,kickoff_at,current_line,over_under)&season=eq.${season}&week=eq.${week}&order=created_at.asc`),
+        sbFetch(`games?select=id,home_team,away_team,kickoff_at,current_line,pss_game_metrics(suggested_side,consensus_spread,edge,pss,pss_bin,qualifies)&season=eq.${season}&week=eq.${week}&order=home_team.asc`),
+        sbFetch(`pss_user_picks?select=*,games(home_team,away_team)&is_lock=eq.true&order=created_at.desc&limit=20`),
       ]);
-      setPicks(pData);
+      const tagged = pData.map((p) => ({ ...p, _table: 'user_picks', _model: 'BobbyCFB' }));
+      const pssTagged = pssPData.map((p) => ({ ...p, _table: 'pss_user_picks', _model: 'BobbyPSSModel' }));
+      setPicks([...tagged, ...pssTagged].sort((a, b) => new Date(a.created_at) - new Date(b.created_at)));
       setGames(gData);
-      setLockHistory(lockData);
+      setPssGames(pssGData);
+      const taggedLock = lockData.map((p) => ({ ...p, _table: 'user_picks', _model: 'BobbyCFB' }));
+      const pssTaggedLock = pssLockData.map((p) => ({ ...p, _table: 'pss_user_picks', _model: 'BobbyPSSModel' }));
+      setLockHistory(
+        [...taggedLock, ...pssTaggedLock]
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+          .slice(0, 20)
+      );
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   };
@@ -52,18 +66,19 @@ export default function MyCard() {
   useEffect(() => { if (week != null) load(); }, [season, week]);
 
   async function toggleLock(pick) {
-    // Unset any existing lock for this week first
+    // The lock is a single shared "Barney Rubble Lock of the Week" across
+    // BOTH models — unset any existing lock in either table first.
     const existingLock = picks.find(p => p.is_lock && p.id !== pick.id);
     setSaving(true);
     try {
       if (existingLock) {
-        await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${existingLock.id}`, {
+        await fetch(`${SUPABASE_URL}/rest/v1/${existingLock._table}?id=eq.${existingLock.id}`, {
           method: 'PATCH', headers: SB_HDR,
           body: JSON.stringify({ is_lock: false }),
         });
       }
       const newLock = !pick.is_lock;
-      await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${pick.id}`, {
+      await fetch(`${SUPABASE_URL}/rest/v1/${pick._table}?id=eq.${pick.id}`, {
         method: 'PATCH', headers: SB_HDR,
         body: JSON.stringify({ is_lock: newLock }),
       });
@@ -71,10 +86,10 @@ export default function MyCard() {
     } finally { setSaving(false); }
   }
 
-  async function removePick(id) {
+  async function removePick(id, table = 'user_picks') {
     setSaving(true);
     try {
-      await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${id}`, { method: 'DELETE', headers: SB_HDR });
+      await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, { method: 'DELETE', headers: SB_HDR });
       load();
     } finally { setSaving(false); }
   }
@@ -101,10 +116,10 @@ export default function MyCard() {
     } finally { setSaving(false); }
   }
 
-  async function updateResult(pickId, result) {
+  async function updateResult(pickId, result, table = 'user_picks') {
     setSaving(true);
     try {
-      await fetch(`${SUPABASE_URL}/rest/v1/user_picks?id=eq.${pickId}`, {
+      await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${pickId}`, {
         method: 'PATCH', headers: SB_HDR,
         body: JSON.stringify({ result }),
       });
@@ -333,17 +348,19 @@ export default function MyCard() {
             ))}
           </div>
 
-          {/* Add from available model plays */}
+          {/* Add from available model plays — BobbyCFB */}
           {games.filter(g => {
             const m = Array.isArray(g.game_metrics) ? g.game_metrics[0] : g.game_metrics;
-            return m?.suggested_play && !picks.find(p => p.game_id === g.id);
+            return m?.suggested_play && !picks.find(p => p._table === 'user_picks' && p.game_id === g.id);
           }).length > 0 && (
             <div style={{ marginTop: 24 }}>
-              <div style={{ fontSize: 12, color: '#5b6272', marginBottom: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em' }}>Available Model Plays Not Yet Added</div>
+              <div style={{ fontSize: 12, color: '#5b6272', marginBottom: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                Available BobbyCFB Plays Not Yet Added
+              </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {games.filter(g => {
                   const m = Array.isArray(g.game_metrics) ? g.game_metrics[0] : g.game_metrics;
-                  return m?.suggested_play && !picks.find(p => p.game_id === g.id);
+                  return m?.suggested_play && !picks.find(p => p._table === 'user_picks' && p.game_id === g.id);
                 }).map(g => {
                   const m = Array.isArray(g.game_metrics) ? g.game_metrics[0] : g.game_metrics;
                   const teamName = m?.suggested_side === 'home' ? g.home_team : g.away_team;
@@ -357,6 +374,46 @@ export default function MyCard() {
                       load(); setSaving(false);
                     }} disabled={saving}>
                       + {teamName} {fmtLine(m?.suggested_line)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Add from available model plays — BobbyPSSModel */}
+          {pssGames.filter(g => {
+            const m = Array.isArray(g.pss_game_metrics) ? g.pss_game_metrics[0] : g.pss_game_metrics;
+            return m?.qualifies && !picks.find(p => p._table === 'pss_user_picks' && p.game_id === g.id);
+          }).length > 0 && (
+            <div style={{ marginTop: 24 }}>
+              <div style={{ fontSize: 12, color: '#5b6272', marginBottom: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                Available BobbyPSSModel Plays Not Yet Added
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {pssGames.filter(g => {
+                  const m = Array.isArray(g.pss_game_metrics) ? g.pss_game_metrics[0] : g.pss_game_metrics;
+                  return m?.qualifies && !picks.find(p => p._table === 'pss_user_picks' && p.game_id === g.id);
+                }).map(g => {
+                  const m = Array.isArray(g.pss_game_metrics) ? g.pss_game_metrics[0] : g.pss_game_metrics;
+                  const teamName = m?.suggested_side === 'home' ? g.home_team : g.away_team;
+                  // Displayed line: consensus, properly signed for the suggested side (same fix as the dashboard).
+                  const num = m?.consensus_spread != null
+                    ? (m.suggested_side === 'home' ? -parseFloat(m.consensus_spread) : parseFloat(m.consensus_spread))
+                    : null;
+                  return (
+                    <button key={g.id} className="btn btn-outline" style={{ fontSize: 12, borderColor: 'rgba(167,139,250,.4)' }} onClick={async () => {
+                      setSaving(true);
+                      // line_played is the game's single stored line (home-positive
+                      // convention) — the actual market price, not the model's fair line.
+                      const linePlayed = g.current_line != null ? parseFloat(g.current_line) : null;
+                      await fetch(`${SUPABASE_URL}/rest/v1/pss_user_picks`, {
+                        method: 'POST', headers: SB_HDR,
+                        body: JSON.stringify({ game_id: g.id, pss_game_metrics_id: null, season, week, played: true, status: 'official', side: m?.suggested_side, line_played: linePlayed, pick_type: 'spread' }),
+                      });
+                      load(); setSaving(false);
+                    }} disabled={saving}>
+                      + {teamName} {fmtLine(num != null ? num.toFixed(1) : null)} <ModelBadge model="BobbyPSSModel" />
                     </button>
                   );
                 })}
@@ -380,6 +437,7 @@ export default function MyCard() {
               <thead>
                 <tr>
                   <th>Season / Week</th>
+                  <th>Model</th>
                   <th>Pick</th>
                   <th>Matchup</th>
                   <th>Result</th>
@@ -391,8 +449,9 @@ export default function MyCard() {
                   const teamName = p.side === 'home' ? g?.home_team : g?.away_team;
                   const resultColor = p.result === 'win' ? '#38bd94' : p.result === 'loss' ? '#f87171' : '#facc15';
                   return (
-                    <tr key={p.id}>
+                    <tr key={`${p._table}-${p.id}`}>
                       <td style={{ color: '#8a92a3' }}>{p.season} / Wk {p.week}</td>
+                      <td><ModelBadge model={p._model} /></td>
                       <td style={{ fontWeight: 700 }}>
                         {p.is_custom ? p.custom_label : `${teamName} ${fmtLine(p.line_played)}`}
                       </td>
@@ -406,7 +465,7 @@ export default function MyCard() {
                   );
                 })}
                 {lockHistory.length === 0 && (
-                  <tr><td colSpan={4} className="empty">No lock history yet. Designate picks as the BRLW Lock on your card.</td></tr>
+                  <tr><td colSpan={5} className="empty">No lock history yet. Designate picks as the BRLW Lock on your card.</td></tr>
                 )}
               </tbody>
             </table>
@@ -414,6 +473,20 @@ export default function MyCard() {
         </div>
       )}
     </div>
+  );
+}
+
+const MODEL_BADGE = {
+  BobbyCFB: { label: 'BobbyCFB', fg: '#38bd94', bg: 'rgba(56,189,148,.15)' },
+  BobbyPSSModel: { label: 'PSS', fg: '#c4b5fd', bg: 'rgba(167,139,250,.18)' },
+};
+
+function ModelBadge({ model }) {
+  const c = MODEL_BADGE[model] || MODEL_BADGE.BobbyCFB;
+  return (
+    <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 800, color: c.fg, background: c.bg, padding: '2px 7px', borderRadius: 10, letterSpacing: '.03em', textTransform: 'uppercase' }}>
+      {c.label}
+    </span>
   );
 }
 
@@ -432,6 +505,7 @@ function PickCard({ pick, onRemove, onToggleLock, onResultChange, saving }) {
           : <>
             <span style={{ fontWeight: 700, fontSize: 14 }}>{teamName} {fmtLine(pick.line_played)}</span>
             {g && <span style={{ marginLeft: 8, fontSize: 12, color: '#8a92a3' }}>{g.away_team} @ {g.home_team}</span>}
+            <ModelBadge model={pick._model} />
           </>
         }
         {pick.note && <div style={{ fontSize: 11, color: '#8a92a3', marginTop: 2 }}>{pick.note}</div>}
@@ -439,7 +513,7 @@ function PickCard({ pick, onRemove, onToggleLock, onResultChange, saving }) {
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
         {/* Result selector */}
         {['win', 'loss', 'push'].map(r => (
-          <button key={r} onClick={() => onResultChange(pick.id, pick.result === r ? null : r)} disabled={saving}
+          <button key={r} onClick={() => onResultChange(pick.id, pick.result === r ? null : r, pick._table)} disabled={saving}
             style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, border: '1px solid', cursor: 'pointer', background: pick.result === r ? (r === 'win' ? '#38bd94' : r === 'loss' ? '#f87171' : '#facc15') : 'transparent', color: pick.result === r ? '#0b0e14' : '#8a92a3', borderColor: pick.result === r ? 'transparent' : '#2a3042', fontWeight: 700 }}>
             {r.toUpperCase()}
           </button>
@@ -450,7 +524,7 @@ function PickCard({ pick, onRemove, onToggleLock, onResultChange, saving }) {
             {pick.is_lock ? '🔒 Lock' : '🔓 Lock?'}
           </button>
         )}
-        <button className="btn btn-danger" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => onRemove(pick.id)} disabled={saving}>✕</button>
+        <button className="btn btn-danger" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => onRemove(pick.id, pick._table)} disabled={saving}>✕</button>
       </div>
     </div>
   );

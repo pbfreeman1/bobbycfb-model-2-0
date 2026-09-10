@@ -56,6 +56,16 @@ function favoredDisplay(line, homeTeam, awayTeam) {
   if (v === 0) return "Pick'em";
   return v > 0 ? `${homeTeam} -${v}` : `${awayTeam} -${Math.abs(v)}`;
 }
+// Model's pick, properly signed for display — mirrors the original dashboard's
+// consensusPick(): uses consensus_spread (not the raw suggested_line column)
+// and applies spreadForSide so the number actually matches the side named.
+function modelPick(r) {
+  if (r.consensus_spread == null || r.suggested_side == null) return null;
+  const team = r.suggested_side === 'home' ? r.home_team : r.away_team;
+  const num = spreadForSide(r.consensus_spread, r.suggested_side);
+  return { team, num, side: r.suggested_side };
+}
+
 function useOutsideClose(ref, onClose) {
   useEffect(() => {
     function handler(e) { if (ref.current && !ref.current.contains(e.target)) onClose(); }
@@ -322,7 +332,7 @@ function NoteModal({ game, existing, onClose, onSaved }) {
 // Detail panel — Recommendation header, PSS breakdown, model predictions,
 // market context, historical profile (spec section 10)
 // ---------------------------------------------------------------------------
-function DetailPanel({ game, onClose }) {
+function DetailPanel({ game, logos, onClose }) {
   const ref = useRef(null);
   useOutsideClose(ref, onClose);
   const [models, setModels] = useState(null);
@@ -410,7 +420,16 @@ function DetailPanel({ game, onClose }) {
           </div>
           <div className="pss-detail-stats">
             <div><span>PSS</span><b>{fmt(game.pss, 1)}</b></div>
-            <div><span>Model Pick</span><b>{game.suggested_side === 'home' ? game.home_team : game.away_team} {fmtLine(fmt(game.suggested_line, 1))}</b></div>
+            <div>
+              <span>Model Pick</span>
+              <b style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                {(() => {
+                  const mp = modelPick(game);
+                  if (!mp) return '—';
+                  return <><TeamLogo src={logos?.[mp.team]} alt="" />{mp.team} {fmtLine(fmt(mp.num, 1))}</>;
+                })()}
+              </b>
+            </div>
             <div><span>Current Line</span><b>{favoredDisplay(game.vegas_line, game.home_team, game.away_team)}</b></div>
             <div><span>Edge</span><b>{fmtLine(fmt(game.edge, 1))}</b></div>
           </div>
@@ -523,6 +542,24 @@ function DetailPanel({ game, onClose }) {
 // ---------------------------------------------------------------------------
 const QUICK_FILTERS = ['All', 'Elite', 'Very Strong+', 'Top 3', 'Top 5', 'Top 7', 'Warnings', 'Model Picks Only'];
 
+function SeasonStatCard({ title, record, note, highlight }) {
+  const decided = record.w + record.l;
+  const p = decided > 0 ? record.w / decided : null;
+  return (
+    <div className="card" style={highlight ? { borderColor: 'rgba(196,181,253,.35)' } : {}}>
+      <div style={{ fontSize: 12, color: '#8a92a3', fontWeight: 700, marginBottom: 6 }}>{title}</div>
+      <div style={{ fontSize: 22, fontWeight: 800 }}>
+        <span style={{ color: '#38bd94' }}>{record.w}</span>
+        <span style={{ color: '#5b6272' }}>-</span>
+        <span style={{ color: '#f87171' }}>{record.l}</span>
+        {record.p > 0 && <span style={{ color: '#facc15' }}>-{record.p}</span>}
+        {decided > 0 && <span style={{ fontSize: 13, color: '#8a92a3', marginLeft: 8 }}>{(p * 100).toFixed(1)}%</span>}
+      </div>
+      <div style={{ fontSize: 11, color: '#5b6272', marginTop: 4 }}>{note}</div>
+    </div>
+  );
+}
+
 export default function PSSDashboard() {
   const [season, setSeason] = useState(2026);
   const [week, setWeek] = useState(null);
@@ -545,6 +582,47 @@ export default function PSSDashboard() {
 
   const [showMobileTable, setShowMobileTable] = useState(false);
   const [mobileSort, setMobileSort] = useState('pss');
+
+  const [showSeasonStats, setShowSeasonStats] = useState(false);
+  const [seasonStats, setSeasonStats] = useState(null);
+  const [seasonStatsLoading, setSeasonStatsLoading] = useState(false);
+
+  async function loadSeasonStats() {
+    setSeasonStatsLoading(true);
+    try {
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/pss_game_metrics?select=id,edge,pss_bin,qualifies,pss_pick_grades(ats_result)&season=eq.${season}`,
+        { headers: SB_HEADERS }
+      );
+      const rows = res.ok ? await res.json() : [];
+      const graded = rows
+        .map((m) => ({ ...m, pg: Array.isArray(m.pss_pick_grades) ? m.pss_pick_grades[0] : m.pss_pick_grades }))
+        .filter((m) => m.pg);
+
+      const tally = (results) => results.reduce((acc, r) => {
+        if (r === 'win') acc.w++; else if (r === 'loss') acc.l++; else if (r === 'push') acc.p++;
+        return acc;
+      }, { w: 0, l: 0, p: 0 });
+
+      const allSlate = tally(graded.map((m) => m.pg.ats_result));
+      const qualified = tally(graded.filter((m) => m.qualifies).map((m) => m.pg.ats_result));
+
+      const binMap = new Map();
+      for (const m of graded) {
+        const bin = m.pss_bin || 'No Play';
+        const row = binMap.get(bin) || [];
+        row.push(m.pg.ats_result);
+        binMap.set(bin, row);
+      }
+      const binRows = PSS_BIN_ORDER
+        .filter((b) => binMap.has(b))
+        .map((b) => ({ label: b, record: tally(binMap.get(b)) }));
+
+      setSeasonStats({ allSlate, qualified, binRows, totalGraded: graded.length });
+    } finally {
+      setSeasonStatsLoading(false);
+    }
+  }
 
   async function loadWeek() {
     setLoading(true); setError(null);
@@ -759,10 +837,58 @@ export default function PSSDashboard() {
 
   return (
     <div className="page pss-page">
-      <div className="page-header">
-        <h1>🧠 BobbyPSSModel — PSS Dashboard</h1>
-        <p>Dynamic Top-K qualification (3/5/7) &amp; Play Strength Score — ranked, weighted signals across all games</p>
+      <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h1>🧠 BobbyPSSModel — PSS Dashboard</h1>
+          <p>Dynamic Top-K qualification (3/5/7) &amp; Play Strength Score — ranked, weighted signals across all games</p>
+        </div>
+        <button
+          className="btn btn-outline"
+          style={{ fontSize: 12 }}
+          onClick={() => { setShowSeasonStats((v) => !v); if (!showSeasonStats && !seasonStats) loadSeasonStats(); }}
+        >
+          📊 Season Stats
+        </button>
       </div>
+
+      {showSeasonStats && (
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <div style={{ fontSize: 14, fontWeight: 800 }}>PSS Season Stats — {season}</div>
+            <button className="btn btn-outline" style={{ fontSize: 11, padding: '4px 10px' }} onClick={loadSeasonStats}>↻ Refresh</button>
+          </div>
+          {seasonStatsLoading && <div className="empty">Loading…</div>}
+          {!seasonStatsLoading && seasonStats && (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 16 }}>
+                <SeasonStatCard title="Full Slate" record={seasonStats.allSlate} note="Every graded game this season" />
+                <SeasonStatCard title="Qualified Plays" record={seasonStats.qualified} note="Cleared Dynamic Top-K qualification" highlight />
+              </div>
+              <div style={{ fontSize: 12, color: '#8a92a3', fontWeight: 700, marginBottom: 8 }}>By PSS Bin</div>
+              <div className="tbl-wrap">
+                <table>
+                  <thead><tr><th>Bin</th><th>Games</th><th>W-L-P</th><th>ATS%</th></tr></thead>
+                  <tbody>
+                    {seasonStats.binRows.map((r) => {
+                      const decided = r.record.w + r.record.l;
+                      const p = decided > 0 ? r.record.w / decided : null;
+                      return (
+                        <tr key={r.label}>
+                          <td><Badge text={r.label} colors={PSS_BIN_COLOR[r.label]} /></td>
+                          <td>{decided + r.record.p}</td>
+                          <td>{r.record.w}-{r.record.l}{r.record.p ? `-${r.record.p}` : ''}</td>
+                          <td>{p != null ? <span style={{ color: p >= 0.524 ? '#38bd94' : '#f87171', fontWeight: 700 }}>{(p * 100).toFixed(1)}%</span> : '—'}</td>
+                        </tr>
+                      );
+                    })}
+                    {seasonStats.binRows.length === 0 && <tr><td colSpan={4} className="empty">No graded PSS games yet this season.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Controls */}
       <div className="card pss-controls">
@@ -823,7 +949,14 @@ export default function PSSDashboard() {
                       </td>
                       <td>{fmtKickoff(r.kickoff_at)}</td>
                       <td>{favoredDisplay(r.vegas_line, r.home_team, r.away_team)}</td>
-                      <td>{r.suggested_side ? `${r.suggested_side === 'home' ? r.home_team : r.away_team} ${fmtLine(fmt(r.suggested_line, 1))}` : '—'}</td>
+                      <td>
+                        {(() => {
+                          const mp = modelPick(r);
+                          if (!mp) return '—';
+                          const mpLogo = logos[mp.team];
+                          return <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><TeamLogo src={mpLogo} alt="" />{mp.team} {fmtLine(fmt(mp.num, 1))}</span>;
+                        })()}
+                      </td>
                       <td>{fmtLine(fmt(r.edge, 1))}</td>
                       <td style={{ fontWeight: 800 }}>{fmt(r.pss, 1)}</td>
                       <td><Badge text={r.pss_bin} colors={binColor} /></td>
@@ -915,7 +1048,16 @@ export default function PSSDashboard() {
                     </div>
                     <div className="pss-mcard-grid">
                       <div><span>Market<MobInfoIcon text={TOOLTIPS.market_spread} /></span><b>{favoredDisplay(r.vegas_line, r.home_team, r.away_team)}</b></div>
-                      <div><span>Model Pick<MobInfoIcon text={TOOLTIPS.model_pick} /></span><b>{r.suggested_side ? `${r.suggested_side === 'home' ? r.home_team : r.away_team} ${fmtLine(fmt(r.suggested_line, 1))}` : '—'}</b></div>
+                      <div>
+                        <span>Model Pick<MobInfoIcon text={TOOLTIPS.model_pick} /></span>
+                        <b style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          {(() => {
+                            const mp = modelPick(r);
+                            if (!mp) return '—';
+                            return <><TeamLogo src={logos[mp.team]} alt="" />{mp.team} {fmtLine(fmt(mp.num, 1))}</>;
+                          })()}
+                        </b>
+                      </div>
                       <div><span>Edge<MobInfoIcon text={TOOLTIPS.edge} /></span><b>{fmtLine(fmt(r.edge, 1))}</b></div>
                       <div><span>PSS<MobInfoIcon text={TOOLTIPS.pss} /></span><b>{fmt(r.pss, 1)}</b></div>
                       <div><span>Top-K<MobInfoIcon text={TOOLTIPS.topk} /></span><b>{r.selected_k ? `${TIER_LABEL[r.attempted_tier] || `Top ${r.selected_k}`}` : '—'}</b></div>
@@ -975,7 +1117,7 @@ export default function PSSDashboard() {
           onSaved={() => { setNoteModalGame(null); loadWeek(); }}
         />
       )}
-      {detailGame && <DetailPanel game={detailGame} onClose={() => setDetailGame(null)} />}
+      {detailGame && <DetailPanel game={detailGame} logos={logos} onClose={() => setDetailGame(null)} />}
 
       <style jsx>{`
         .pss-controls { margin-bottom: 16px; display: flex; flex-direction: column; gap: 12px; }

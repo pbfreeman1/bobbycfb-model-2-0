@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { sbFetch, fmt, getCurrentWeek } from '../../lib/supabase';
 
 const CONFIDENCE_ORDER = ['Very Strong', 'Strong', 'Moderate', 'Weak', 'Very Weak'];
+const PSS_BIN_ORDER = ['Elite', 'Very Strong', 'Strong', 'Moderate', 'No Play'];
 const BREAKEVEN = 0.524; // standard -110 juice
 const EDGE_BUCKETS = [
   { label: '0 - 1.5', min: 0, max: 1.5 },
@@ -12,10 +13,38 @@ const EDGE_BUCKETS = [
   { label: '7+', min: 7, max: Infinity },
 ];
 
+// Config for each model's results — lets the rest of this page (summary
+// cards, breakdown tables, weekly trend) stay generic across both models.
+const MODEL_CONFIG = {
+  original: {
+    label: 'BobbyCFB (Original)',
+    metricsTable: 'game_metrics',
+    gradeRelation: 'pick_grades',
+    filterField: 'suggested_play',
+    binField: 'confidence_bin',
+    binOrder: CONFIDENCE_ORDER,
+    filterLabel: 'Suggested Plays',
+    filterNote: 'Edge \u22651.5, StdDev \u22642.5, Agreement \u226585%',
+    hasSeasonWeekDirect: false, // needs a games lookup first
+  },
+  pss: {
+    label: 'BobbyPSSModel',
+    metricsTable: 'pss_game_metrics',
+    gradeRelation: 'pss_pick_grades',
+    filterField: 'qualifies',
+    binField: 'pss_bin',
+    binOrder: PSS_BIN_ORDER,
+    filterLabel: 'Qualified Plays',
+    filterNote: 'Cleared Dynamic Top-K (3/5/7) qualification',
+    hasSeasonWeekDirect: true, // pss_game_metrics has season/week columns directly
+  },
+};
+
 export default function BobbyResults() {
   const [season, setSeason] = useState(2026);
   const [week, setWeek] = useState(null); // resolved to the latest week with games below
   const [mode, setMode] = useState('week'); // 'week' | 'season'
+  const [model, setModel] = useState('original'); // 'original' | 'pss'
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -36,41 +65,60 @@ export default function BobbyResults() {
   const load = async () => {
     setLoading(true); setError(null);
     try {
-      // ---- Top summary + breakdowns for the selected scope (This Week / Season to Date) ----
-      const games = await sbFetch(`games?select=id&season=eq.${season}&${weekFilter}`);
-      const gameIds = games.map((g) => g.id);
-      const idList = gameIds.length ? `(${gameIds.join(',')})` : '(00000000-0000-0000-0000-000000000000)';
+      const cfg = MODEL_CONFIG[model];
+      let graded, trendGraded;
 
-      const metrics = await sbFetch(
-        `game_metrics?select=id,game_id,edge,mss,confidence_bin,suggested_play,pick_grades(ats_result)&game_id=in.${idList}`
-      );
-      const graded = metrics
-        .map((m) => ({ ...m, pg: Array.isArray(m.pick_grades) ? m.pick_grades[0] : m.pick_grades }))
-        .filter((m) => m.pg);
+      if (!cfg.hasSeasonWeekDirect) {
+        // ---- Original model: game_metrics has no season/week of its own, so look games up first ----
+        const games = await sbFetch(`games?select=id&season=eq.${season}&${weekFilter}`);
+        const gameIds = games.map((g) => g.id);
+        const idList = gameIds.length ? `(${gameIds.join(',')})` : '(00000000-0000-0000-0000-000000000000)';
+
+        const metrics = await sbFetch(
+          `${cfg.metricsTable}?select=id,game_id,edge,${cfg.binField},${cfg.filterField},${cfg.gradeRelation}(ats_result)&game_id=in.${idList}`
+        );
+        graded = metrics
+          .map((m) => ({ ...m, pg: Array.isArray(m[cfg.gradeRelation]) ? m[cfg.gradeRelation][0] : m[cfg.gradeRelation] }))
+          .filter((m) => m.pg);
+
+        const trendGames = await sbFetch(`games?select=id,week&season=eq.${season}&week=lte.${week}`);
+        const trendGameIds = trendGames.map((g) => g.id);
+        const trendIdList = trendGameIds.length ? `(${trendGameIds.join(',')})` : '(00000000-0000-0000-0000-000000000000)';
+        const weekByGame = new Map(trendGames.map((g) => [g.id, g.week]));
+        const trendMetrics = await sbFetch(
+          `${cfg.metricsTable}?select=id,game_id,${cfg.filterField},${cfg.gradeRelation}(ats_result)&game_id=in.${trendIdList}`
+        );
+        trendGraded = trendMetrics
+          .map((m) => ({ ...m, pg: Array.isArray(m[cfg.gradeRelation]) ? m[cfg.gradeRelation][0] : m[cfg.gradeRelation], week: weekByGame.get(m.game_id) }))
+          .filter((m) => m.pg);
+      } else {
+        // ---- PSS model: pss_game_metrics carries season/week directly, no games lookup needed ----
+        const metricsWeekFilter = mode === 'week' ? `week=eq.${week}` : `week=lte.${week}`;
+        const metrics = await sbFetch(
+          `${cfg.metricsTable}?select=id,game_id,edge,${cfg.binField},${cfg.filterField},${cfg.gradeRelation}(ats_result)&season=eq.${season}&${metricsWeekFilter}`
+        );
+        graded = metrics
+          .map((m) => ({ ...m, pg: Array.isArray(m[cfg.gradeRelation]) ? m[cfg.gradeRelation][0] : m[cfg.gradeRelation] }))
+          .filter((m) => m.pg);
+
+        const trendMetrics = await sbFetch(
+          `${cfg.metricsTable}?select=id,game_id,week,${cfg.filterField},${cfg.gradeRelation}(ats_result)&season=eq.${season}&week=lte.${week}`
+        );
+        trendGraded = trendMetrics
+          .map((m) => ({ ...m, pg: Array.isArray(m[cfg.gradeRelation]) ? m[cfg.gradeRelation][0] : m[cfg.gradeRelation] }))
+          .filter((m) => m.pg);
+      }
 
       setAllSlate(tally(graded.map((m) => m.pg.ats_result)));
-      setSuggested(tally(graded.filter((m) => m.suggested_play).map((m) => m.pg.ats_result)));
-      setBinRows(bucketBy(graded, (m) => m.confidence_bin || 'Very Weak', CONFIDENCE_ORDER));
+      setSuggested(tally(graded.filter((m) => m[cfg.filterField]).map((m) => m.pg.ats_result)));
+      setBinRows(bucketBy(graded, (m) => m[cfg.binField] || cfg.binOrder[cfg.binOrder.length - 1], cfg.binOrder));
       setEdgeRows(bucketByEdge(graded));
-
-      // ---- Weekly trend, always spans season start through the selected week ----
-      const trendGames = await sbFetch(`games?select=id,week&season=eq.${season}&week=lte.${week}`);
-      const trendGameIds = trendGames.map((g) => g.id);
-      const trendIdList = trendGameIds.length ? `(${trendGameIds.join(',')})` : '(00000000-0000-0000-0000-000000000000)';
-      const weekByGame = new Map(trendGames.map((g) => [g.id, g.week]));
-
-      const trendMetrics = await sbFetch(
-        `game_metrics?select=id,game_id,suggested_play,pick_grades(ats_result)&game_id=in.${trendIdList}`
-      );
-      const trendGraded = trendMetrics
-        .map((m) => ({ ...m, pg: Array.isArray(m.pick_grades) ? m.pick_grades[0] : m.pick_grades, week: weekByGame.get(m.game_id) }))
-        .filter((m) => m.pg);
 
       const byWeek = new Map();
       for (const m of trendGraded) {
         const row = byWeek.get(m.week) || { week: m.week, all: [], suggested: [] };
         row.all.push(m.pg.ats_result);
-        if (m.suggested_play) row.suggested.push(m.pg.ats_result);
+        if (m[cfg.filterField]) row.suggested.push(m.pg.ats_result);
         byWeek.set(m.week, row);
       }
       setWeeklyTrend(
@@ -82,7 +130,7 @@ export default function BobbyResults() {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { if (week != null) load(); }, [season, week, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (week != null) load(); }, [season, week, mode, model]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const insights = buildInsights({ allSlate, suggested, binRows, edgeRows });
 
@@ -91,7 +139,7 @@ export default function BobbyResults() {
       <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h1>🏈 Bobby Model Results</h1>
-          <p>How the BobbyModels consensus itself performed &mdash; every game, not just the qualified plays</p>
+          <p>How each model's consensus itself performed &mdash; every game, not just the qualified plays</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <label style={{ fontSize: 12, color: '#8a92a3' }}>Season</label>
@@ -106,14 +154,31 @@ export default function BobbyResults() {
         </div>
       </div>
 
+      {/* Model selector */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid #1e2535' }}>
+        {Object.entries(MODEL_CONFIG).map(([key, cfg]) => (
+          <button
+            key={key}
+            onClick={() => setModel(key)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 14, fontWeight: 700,
+              color: model === key ? '#e6e9ef' : '#5b6272',
+              borderBottom: `2px solid ${model === key ? (key === 'pss' ? '#c4b5fd' : '#38bd94') : 'transparent'}`,
+            }}
+          >
+            {key === 'pss' ? '🧠 ' : '🏈 '}{cfg.label}
+          </button>
+        ))}
+      </div>
+
       {loading && <div className="loading">Loading results…</div>}
       {error && <div className="error-msg">{error}</div>}
 
       {!loading && !error && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: 20 }}>
-            <SummaryCard title="All 43 Plays (Full Slate)" record={allSlate} note="Every graded game, win or lose" />
-            <SummaryCard title="Suggested Plays" record={suggested} note="Edge \u22651.5, StdDev \u22642.5, Agreement \u226585%" highlight />
+            <SummaryCard title="Full Slate" record={allSlate} note="Every graded game, win or lose" />
+            <SummaryCard title={MODEL_CONFIG[model].filterLabel} record={suggested} note={MODEL_CONFIG[model].filterNote} highlight />
           </div>
 
           {insights.length > 0 && (
@@ -129,7 +194,7 @@ export default function BobbyResults() {
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16, marginBottom: 20 }}>
             <div>
-              <div style={{ fontSize: 12, color: '#8a92a3', fontWeight: 700, marginBottom: 8 }}>By Confidence Bin</div>
+              <div style={{ fontSize: 12, color: '#8a92a3', fontWeight: 700, marginBottom: 8 }}>{model === 'pss' ? 'By PSS Bin' : 'By Confidence Bin'}</div>
               <BreakdownTable rows={binRows} labelKey="label" />
             </div>
             <div>
@@ -169,7 +234,7 @@ export default function BobbyResults() {
 
       <p style={{ fontSize: 12, color: '#5b6272', marginTop: 16 }}>
         "Full Slate" grades the consensus pick (whichever side has the edge) for every game, regardless of whether it cleared the qualification filter.
-        Comparing it to "Suggested Plays" shows whether the filter is actually adding value, and the bin/edge breakdowns show whether MSS and edge size are calibrated the way the 2021-2025 backtest predicted.
+        Comparing it to "{MODEL_CONFIG[model].filterLabel}" shows whether the filter is actually adding value, and the bin/edge breakdowns show whether {model === 'pss' ? 'PSS' : 'MSS'} and edge size are calibrated the way the backtest predicted.
       </p>
     </div>
   );
@@ -238,9 +303,9 @@ function buildInsights({ allSlate, suggested, binRows, edgeRows }) {
     if (decided < 5) continue; // too small a sample to flag
     const p = row.record.wins / decided;
     if (p < BREAKEVEN - 0.03) {
-      notes.push(`"${row.label}" confidence games are hitting only ${(p * 100).toFixed(1)}% ATS over ${decided} decided games \u2014 below the ${(BREAKEVEN * 100).toFixed(1)}% breakeven line.`);
+      notes.push(`"${row.label}" bin games are hitting only ${(p * 100).toFixed(1)}% ATS over ${decided} decided games \u2014 below the ${(BREAKEVEN * 100).toFixed(1)}% breakeven line.`);
     } else if (p > BREAKEVEN + 0.08) {
-      notes.push(`"${row.label}" confidence games are running hot at ${(p * 100).toFixed(1)}% ATS over ${decided} games.`);
+      notes.push(`"${row.label}" bin games are running hot at ${(p * 100).toFixed(1)}% ATS over ${decided} games.`);
     }
   }
 
