@@ -5,7 +5,7 @@
 
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { getCurrentWeek } from '../lib/supabase';
+import { getCurrentWeek } from '../../lib/supabase';
 
 const SUPABASE_URL = 'https://zpmdrazbqgzheqkvfltv.supabase.co';
 const SUPABASE_ANON_KEY =
