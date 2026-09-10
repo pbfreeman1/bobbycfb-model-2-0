@@ -59,7 +59,11 @@ export default function MyCard() {
 
   useEffect(() => {
     let cancelled = false;
-    getCurrentWeek(season).then((w) => { if (!cancelled) setWeek(w); });
+    // Default to latest scheduled week (not just final) so current week shows on load
+    fetch(`${SUPABASE_URL}/rest/v1/games?select=week&season=eq.${season}&order=week.desc&limit=1`, { headers: SB_HEADERS })
+      .then(r => r.json())
+      .then(rows => { if (!cancelled) setWeek(rows.length ? rows[0].week : 1); })
+      .catch(() => { if (!cancelled) setWeek(1); });
     return () => { cancelled = true; };
   }, [season]);
 

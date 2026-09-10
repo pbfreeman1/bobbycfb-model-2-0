@@ -540,6 +540,126 @@ function MyCardModal({ rows, picksByGame, onClose }) {
 }
 
 // ---------------------------------------------------------------------------
+// DashPickModal — pick entry modal for the main dashboard, writes to
+// user_picks (same table as MSS dashboard + My Card page) so all picks
+// are centralized and visible on My Card from any dashboard.
+// ---------------------------------------------------------------------------
+function DashPickModal({ game, onClose, onSaved, onDeleted }) {
+  const [pickType, setPickType] = useState('spread');
+  const [side, setSide] = useState(null);
+  const [units, setUnits] = useState(1);
+  const [status, setStatus] = useState('official');
+  const [saving, setSaving] = useState(false);
+
+  const vegasLine = game.current_line != null ? parseFloat(game.current_line) : null;
+  // home-positive convention: home spread = -line, away = +line
+  const homeSpread = vegasLine != null ? (vegasLine > 0 ? -vegasLine : Math.abs(vegasLine)) : null;
+  const awaySpread = vegasLine != null ? (vegasLine > 0 ? vegasLine : -Math.abs(vegasLine)) : null;
+  function fmtSpread(n) { if (n == null) return '—'; return n > 0 ? `+${n.toFixed(1)}` : n.toFixed(1); }
+
+  async function handleSave() {
+    if (!side) return;
+    setSaving(true);
+    await onSaved(pickType, side, units, status);
+    setSaving(false);
+  }
+
+  const overlayStyle = {
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', zIndex: 200,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+  };
+  const modalStyle = {
+    background: '#131722', border: '1px solid #2a3042', borderRadius: 12,
+    padding: 22, width: 340, maxWidth: '92vw',
+  };
+  const seg = (active) => ({
+    flex: 1, padding: '7px 0', borderRadius: 6, border: `1px solid ${active ? '#D4A73C' : '#2a3042'}`,
+    background: active ? 'rgba(212,167,60,0.12)' : '#0b0e14',
+    color: active ? '#D4A73C' : '#8a92a3', cursor: 'pointer', fontSize: 13, fontWeight: active ? 700 : 400,
+  });
+  const teamBtn = (active) => ({
+    flex: 1, padding: '12px 10px', borderRadius: 8, border: `1px solid ${active ? '#6FBF73' : '#2a3042'}`,
+    background: active ? 'rgba(111,191,115,0.12)' : '#0b0e14',
+    color: active ? '#6FBF73' : '#e6e9ef', cursor: 'pointer', textAlign: 'center',
+    fontSize: 13, fontWeight: active ? 700 : 400,
+  });
+  const unitBtn = (active) => ({
+    width: 36, height: 36, borderRadius: 6, border: `1px solid ${active ? '#6FBF73' : '#2a3042'}`,
+    background: active ? '#6FBF73' : '#0b0e14', color: active ? '#0b0e14' : '#8a92a3',
+    cursor: 'pointer', fontSize: 14, fontWeight: active ? 700 : 400,
+  });
+
+  return (
+    <div style={overlayStyle} onClick={onClose}>
+      <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#e6e9ef' }}>{game.away_team} @ {game.home_team}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#8a92a3', cursor: 'pointer', fontSize: 16 }}>✕</button>
+        </div>
+
+        {/* Type toggle */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+          <button style={seg(pickType === 'spread')} onClick={() => { setPickType('spread'); setSide(null); }}>Spread</button>
+          <button style={seg(pickType === 'total')} onClick={() => { setPickType('total'); setSide(null); }}>Total</button>
+        </div>
+
+        {/* Side picker */}
+        {pickType === 'spread' ? (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+            <button style={teamBtn(side === 'away')} onClick={() => setSide('away')}>
+              <div style={{ fontSize: 12, color: '#8a92a3', marginBottom: 3 }}>{game.away_team}</div>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtSpread(awaySpread)}</div>
+            </button>
+            <button style={teamBtn(side === 'home')} onClick={() => setSide('home')}>
+              <div style={{ fontSize: 12, color: '#8a92a3', marginBottom: 3 }}>{game.home_team}</div>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtSpread(homeSpread)}</div>
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+            <button style={teamBtn(side === 'over')} onClick={() => setSide('over')}>
+              <div style={{ fontSize: 12, color: '#8a92a3', marginBottom: 3 }}>Over</div>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>{game.over_under ?? '—'}</div>
+            </button>
+            <button style={teamBtn(side === 'under')} onClick={() => setSide('under')}>
+              <div style={{ fontSize: 12, color: '#8a92a3', marginBottom: 3 }}>Under</div>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>{game.over_under ?? '—'}</div>
+            </button>
+          </div>
+        )}
+
+        {/* Units */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 11, color: '#8a92a3', marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.5 }}>Units</div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {[1, 2, 3, 4, 5].map((u) => (
+              <button key={u} style={unitBtn(units === u)} onClick={() => setUnits(u)}>{u}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Status */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 11, color: '#8a92a3', marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.5 }}>Status</div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button style={seg(status === 'lean')} onClick={() => setStatus('lean')}>Lean</button>
+            <button style={seg(status === 'official')} onClick={() => setStatus('official')}>Official</button>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={onClose} style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: '1px solid #2a3042', background: 'transparent', color: '#8a92a3', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+          <button onClick={handleSave} disabled={saving || !side} style={{ flex: 2, padding: '9px 0', borderRadius: 8, border: 'none', background: side ? '#6FBF73' : '#2a3042', color: side ? '#0b0e14' : '#5b6272', cursor: side && !saving ? 'pointer' : 'default', fontSize: 13, fontWeight: 700 }}>
+            {saving ? 'Saving…' : 'Save Pick'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Game card
 // ---------------------------------------------------------------------------
 function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, notesDraft, onSetLean, onSetNotesDraft, onCommitNotes, onAddPlay, onRemovePlay, researchTags, onAddResearchTag, onRemoveResearchTag, onOpenDrilldown }) {
@@ -554,6 +674,7 @@ function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, not
   const [playType, setPlayType] = useState('spread');
   const [playSide, setPlaySide] = useState('home');
   const [playUnits, setPlayUnits] = useState(1);
+  const [showPickModal, setShowPickModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showTagForm, setShowTagForm] = useState(false);
 
@@ -588,8 +709,16 @@ function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, not
           <Stat label="MARKET" value={favoredMarket(game.current_line, home, away)} />
           <Stat label="MOVE" value={<Move v={move} />} />
           <Stat label="O/U" value={game.over_under != null ? fmt(game.over_under, 1) : '—'} />
-          <button onClick={onToggle} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.sub, padding: 4, fontSize: 16 }}>
-            {expanded ? '▲' : '▼'}
+          <button onClick={onToggle} style={{
+            background: expanded ? `${C.pss}1A` : C.surface2,
+            border: `1px solid ${expanded ? C.pss : C.border}`,
+            borderRadius: 6, cursor: 'pointer',
+            color: expanded ? C.pss : C.sub,
+            fontSize: 12, padding: '5px 10px', lineHeight: 1, flexShrink: 0,
+            display: 'flex', alignItems: 'center', gap: 4,
+            minWidth: 62, justifyContent: 'center', fontFamily: 'inherit',
+          }}>
+            {expanded ? '▲ Less' : '▼ More'}
           </button>
         </div>
       </div>
@@ -624,7 +753,7 @@ function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, not
       </div>
 
       {expanded && (
-        <div style={{ borderTop: `1px solid ${C.border}` }}>
+        <div style={{ borderTop: `2px solid ${C.pss}`, background: C.surface2, borderRadius: '0 0 8px 8px', margin: '0 0 2px' }}>
           {/* PSS panel — primary */}
           <div style={{ padding: '16px 18px', borderBottom: `1px solid ${C.border}`, background: `${C.pss}08` }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -707,7 +836,7 @@ function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, not
             </div>
           )}
 
-          {/* Lean / play / notes — persisted to my_picks */}
+          {/* Lean / play / notes — persisted to user_picks (centralized) */}
           <div style={{ padding: '12px 18px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginBottom: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -737,23 +866,26 @@ function GameCard({ row, expanded, onToggle, pssRank, mssRank, logos, picks, not
               </div>
             ))}
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-              <select value={playType} onChange={(e) => setPlayType(e.target.value)} style={{ ...FM, fontSize: 11, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, padding: '5px 6px', color: C.text }}>
-                <option value="spread">Spread</option>
-                <option value="total">Total</option>
-                <option value="moneyline">ML</option>
-              </select>
-              <select value={playSide} onChange={(e) => setPlaySide(e.target.value)} style={{ ...FM, fontSize: 11, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, padding: '5px 6px', color: C.text }}>
-                {playType === 'total'
-                  ? <><option value="over">Over</option><option value="under">Under</option></>
-                  : <><option value="home">{home}</option><option value="away">{away}</option></>}
-              </select>
-              <input type="number" step="0.5" value={playUnits} onChange={(e) => setPlayUnits(parseFloat(e.target.value))}
-                style={{ ...FM, fontSize: 11, width: 54, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, padding: '5px 6px', color: C.text }} />
-              <button disabled={saving} onClick={async () => { setSaving(true); try { await onAddPlay(game.id, playType, playSide, playUnits); } finally { setSaving(false); } }} style={{ ...FM, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 3, border: `1px solid ${C.agree}`, background: `${C.agree}1A`, color: C.agree, cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1 }}>
-                + Add pick
-              </button>
-            </div>
+            <button
+              onClick={() => setShowPickModal(true)}
+              style={{ ...FM, fontSize: 11.5, marginTop: 8, padding: '6px 14px', borderRadius: 4, border: `1px solid ${C.agree}`, background: `${C.agree}1A`, color: C.agree, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+            >
+              + Add Pick
+            </button>
+            {showPickModal && (
+              <DashPickModal
+                game={game}
+                onClose={() => setShowPickModal(false)}
+                onSaved={async (type, side, units, status) => {
+                  setShowPickModal(false);
+                  await onAddPlay(game.id, type, side, units, status);
+                }}
+                onDeleted={(pickId) => {
+                  setShowPickModal(false);
+                  onRemovePlay(game.id, pickId);
+                }}
+              />
+            )}
           </div>
         </div>
       )}
@@ -780,7 +912,7 @@ export default function Dashboard() {
   const [sortBy, setSortBy] = useState('pss');
   const [sortDir, setSortDir] = useState('desc');
 
-  // Persisted picks (my_picks), keyed by game id: { lean: row|null, note: row|null, plays: [row] }.
+  // Persisted picks (user_picks — same table as MSS/My Card), keyed by game id: { lean: row|null, note: row|null, plays: [row] }.
   // A per-game note and a lean are each stored as a single distinguishing
   // row (pick_type='note', or status='lean') rather than a separate table —
   // see PR4 handoff notes for why.
@@ -886,7 +1018,7 @@ export default function Dashboard() {
         if (games.length > 0) {
           const ids = games.map((g) => g.id).join(',');
           try {
-            const picks = await sbFetch(`my_picks?select=*&game_id=in.(${ids})&order=created_at.asc`);
+            const picks = await sbFetch(`user_picks?select=*&game_id=in.(${ids})&order=created_at.asc`);
             if (cancelled) return;
             const grouped = {};
             for (const p of picks) {
@@ -936,17 +1068,17 @@ export default function Dashboard() {
   async function setLean(gameId, side) {
     const current = picksByGame[gameId]?.lean;
     if (current && current.side === side) {
-      await sbFetch(`my_picks?id=eq.${current.id}`, { method: 'DELETE' });
+      await sbFetch(`user_picks?id=eq.${current.id}`, { method: 'DELETE' });
       setPicksByGame((prev) => ({ ...prev, [gameId]: { ...(prev[gameId] || { note: null, plays: [] }), lean: null } }));
       return;
     }
     if (current) {
-      const [updated] = await sbFetch(`my_picks?id=eq.${current.id}`, {
+      const [updated] = await sbFetch(`user_picks?id=eq.${current.id}`, {
         method: 'PATCH', body: JSON.stringify({ side, updated_at: new Date().toISOString() }),
       });
       setPicksByGame((prev) => ({ ...prev, [gameId]: { ...prev[gameId], lean: updated } }));
     } else {
-      const [created] = await sbFetch(`my_picks`, {
+      const [created] = await sbFetch(`user_picks`, {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId, season, week, pick_type: 'spread', side, status: 'lean', units: 0 }),
       });
@@ -964,18 +1096,18 @@ export default function Dashboard() {
     const current = picksByGame[gameId]?.note;
     if (!text.trim()) {
       if (current) {
-        await sbFetch(`my_picks?id=eq.${current.id}`, { method: 'DELETE' });
+        await sbFetch(`user_picks?id=eq.${current.id}`, { method: 'DELETE' });
         setPicksByGame((prev) => ({ ...prev, [gameId]: { ...prev[gameId], note: null } }));
       }
       return;
     }
     if (current) {
-      const [updated] = await sbFetch(`my_picks?id=eq.${current.id}`, {
+      const [updated] = await sbFetch(`user_picks?id=eq.${current.id}`, {
         method: 'PATCH', body: JSON.stringify({ note: text, updated_at: new Date().toISOString() }),
       });
       setPicksByGame((prev) => ({ ...prev, [gameId]: { ...prev[gameId], note: updated } }));
     } else {
-      const [created] = await sbFetch(`my_picks`, {
+      const [created] = await sbFetch(`user_picks`, {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId, season, week, pick_type: 'note', units: 0, status: 'official', note: text }),
       });
@@ -984,10 +1116,14 @@ export default function Dashboard() {
   }
 
   // Plays: any number per game, each its own row.
-  async function addPlay(gameId, type, side, units) {
-    const [created] = await sbFetch(`my_picks`, {
+  async function addPlay(gameId, type, side, units, status = 'official') {
+    const row = rows.find((r) => r.game.id === gameId);
+    const linePlayed = type === 'total'
+      ? (row?.game.over_under ?? null)
+      : (row?.game.current_line != null ? parseFloat(row.game.current_line) : null);
+    const [created] = await sbFetch(`user_picks`, {
       method: 'POST',
-      body: JSON.stringify({ game_id: gameId, season, week, pick_type: type, side, units, status: 'official' }),
+      body: JSON.stringify({ game_id: gameId, season, week, pick_type: type, side, units, status, played: true, line_played: linePlayed }),
     });
     setPicksByGame((prev) => ({
       ...prev,
@@ -995,7 +1131,7 @@ export default function Dashboard() {
     }));
   }
   async function removePlay(gameId, pickId) {
-    await sbFetch(`my_picks?id=eq.${pickId}`, { method: 'DELETE' });
+    await sbFetch(`user_picks?id=eq.${pickId}`, { method: 'DELETE' });
     setPicksByGame((prev) => ({ ...prev, [gameId]: { ...prev[gameId], plays: prev[gameId].plays.filter((p) => p.id !== pickId) } }));
   }
 
