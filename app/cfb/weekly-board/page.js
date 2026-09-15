@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { sbFetch, fmt, fmtLine, fmtKickoff, getCurrentWeek, CONFIDENCE_ORDER, CONF_BADGE_CLASS } from '../../lib/supabase';
+import { sbFetch, fmt, fmtLine, fmtKickoff, getCurrentWeek, CONFIDENCE_ORDER, CONF_BADGE_CLASS } from '../../../lib/supabase';
 
 export default function WeeklyBoard() {
   const [season, setSeason] = useState(2026);

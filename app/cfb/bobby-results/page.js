@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { sbFetch, fmt, getCurrentWeek } from '../../lib/supabase';
+import { sbFetch, fmt, getCurrentWeek } from '../../../lib/supabase';
 
 const CONFIDENCE_ORDER = ['Very Strong', 'Strong', 'Moderate', 'Weak', 'Very Weak'];
 const PSS_BIN_ORDER = ['Elite', 'Very Strong', 'Strong', 'Moderate', 'No Play'];

@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { sbFetch, fmt, getCurrentWeek } from '../../lib/supabase';
+import { sbFetch, fmt, getCurrentWeek } from '../../../lib/supabase';
 
 export default function Results() {
   const [season, setSeason] = useState(2026);

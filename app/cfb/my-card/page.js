@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { SUPABASE_URL, SUPABASE_ANON_KEY, sbFetch, sbHeaders, fmt, fmtLine, fmtKickoff, getCurrentWeek } from '../../lib/supabase';
+import { SUPABASE_URL, SUPABASE_ANON_KEY, sbFetch, sbHeaders, fmt, fmtLine, fmtKickoff, getCurrentWeek } from '../../../lib/supabase';
 
 const SB_HDR = {
   apikey: SUPABASE_ANON_KEY,

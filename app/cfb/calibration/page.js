@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { sbFetch, fmt } from '../../lib/supabase';
+import { sbFetch, fmt } from '../../../lib/supabase';
 
 export default function Calibration() {
   const [runs, setRuns] = useState([]);
