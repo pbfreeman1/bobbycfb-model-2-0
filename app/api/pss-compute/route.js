@@ -43,13 +43,61 @@ export async function POST(req) {
     const pool = grades.slice(0, TOP_POOL_SIZE); // the same validated Top-7 pool
     const poolIds = pool.map((g) => g.model_id);
 
-    // 2. Games for this week
+    // 2. Games for this week — include opening_line (written by /api/cfbd-sync
+    //    from the predictiontracker lineopen column at ingest time).
     const { data: games, error: gErr } = await supabase
       .from('games')
       .select('id, current_line, opening_line')
       .eq('season', season)
       .eq('week', week);
     if (gErr) throw new Error(`games: ${gErr.message}`);
+
+    // FIX: If opening_line is missing on any game, fall back to fetching it
+    // from the CFBD lines API so CLV can still be computed this week.
+    const missingOpeningLine = games.filter((g) => g.opening_line == null);
+    if (missingOpeningLine.length > 0) {
+      const cfbdKey = process.env.CFBD_API_KEY;
+      if (cfbdKey) {
+        try {
+          const linesRes = await fetch(
+            `https://api.collegefootballdata.com/lines?year=${season}&week=${week}&seasonType=regular`,
+            { headers: { Authorization: `Bearer ${cfbdKey}` } }
+          );
+          if (linesRes.ok) {
+            const linesData = await linesRes.json();
+            // Build a map of game_id -> opening spread from CFBD lines
+            // CFBD lines endpoint returns provider-specific lines; use consensus or first available
+            const openingByGameId = {};
+            for (const l of linesData) {
+              // Match by CFBD game id — games table stores cfbd_id
+              const line = l.lines?.find((ln) => ln.provider === 'consensus') || l.lines?.[0];
+              if (line?.spreadOpen != null) {
+                openingByGameId[l.id] = parseFloat(line.spreadOpen);
+              }
+            }
+            // Write back any opening lines we found to games table
+            for (const game of missingOpeningLine) {
+              const { data: gameRow } = await supabase
+                .from('games')
+                .select('cfbd_id')
+                .eq('id', game.id)
+                .single();
+              if (gameRow?.cfbd_id && openingByGameId[gameRow.cfbd_id] != null) {
+                const openLine = openingByGameId[gameRow.cfbd_id];
+                await supabase
+                  .from('games')
+                  .update({ opening_line: openLine })
+                  .eq('id', game.id);
+                game.opening_line = openLine; // update in-memory for this run
+              }
+            }
+          }
+        } catch (linesFetchErr) {
+          // Non-fatal — proceed without opening lines; CLV will be null
+          console.warn('Could not fetch CFBD lines for opening_line fallback:', linesFetchErr.message);
+        }
+      }
+    }
 
     // 3. Raw predictions from the Top-7 pool for these games
     const gameIds = games.map((g) => g.id);
@@ -145,6 +193,7 @@ export async function POST(req) {
       games: metricsInserted,
       qualified_plays: qualifiedPlays,
       snapshot_week: snapshotWeek,
+      opening_lines_present: games.filter((g) => g.opening_line != null).length,
       ...(firstError ? { warning: `Some rows failed to upsert, e.g.: ${firstError}` } : {}),
     });
   } catch (e) {

@@ -22,6 +22,7 @@ export async function POST(req) {
   if (!cfbdKey) return Response.json({ error: 'CFBD_API_KEY not set' }, { status: 500 });
 
   try {
+    // Fetch game scores
     const res = await fetch(
       `https://api.collegefootballdata.com/games?year=${season}&week=${week}&seasonType=regular`,
       { headers: { Authorization: `Bearer ${cfbdKey}` } }
@@ -29,9 +30,36 @@ export async function POST(req) {
     if (!res.ok) return Response.json({ error: `CFBD error ${res.status}` }, { status: 502 });
     const cfbdGames = await res.json();
 
+    // FIX: Fetch closing lines from the dedicated CFBD /lines endpoint.
+    // The /games endpoint does NOT include a lines array — g.lines was always
+    // undefined, causing clv = vegasLine - vegasLine = 0 every week.
+    let closingLineByCfbdId = {};
+    try {
+      const linesRes = await fetch(
+        `https://api.collegefootballdata.com/lines?year=${season}&week=${week}&seasonType=regular`,
+        { headers: { Authorization: `Bearer ${cfbdKey}` } }
+      );
+      if (linesRes.ok) {
+        const linesData = await linesRes.json();
+        for (const l of linesData) {
+          // Prefer consensus provider; fall back to first available
+          const line = l.lines?.find((ln) => ln.provider === 'consensus') || l.lines?.[0];
+          if (line?.spread != null) {
+            // CFBD lines use negative = home favored (standard sportsbook convention).
+            // Our system uses positive = home favored (predictiontracker convention).
+            // Negate to convert.
+            closingLineByCfbdId[l.id] = -parseFloat(line.spread);
+          }
+        }
+      }
+    } catch (linesErr) {
+      // Non-fatal — CLV will be null for this week rather than crashing the grade
+      console.warn('Could not fetch CFBD lines for CLV:', linesErr.message);
+    }
+
     const { data: dbGames, error: dbGamesErr } = await supabase
       .from('games')
-      .select('id, home_team, away_team, current_line')
+      .select('id, home_team, away_team, current_line, cfbd_id')
       .eq('season', season)
       .eq('week', week);
     if (dbGamesErr) return Response.json({ error: dbGamesErr.message }, { status: 500 });
@@ -55,6 +83,13 @@ export async function POST(req) {
       if (g.homePoints == null || g.awayPoints == null) continue;
       const margin = (g.homePoints || 0) - (g.awayPoints || 0);
 
+      // Resolve closing line: use the CFBD /lines fetch result if available,
+      // otherwise fall back to current_line already stored in games table.
+      // cfbd_id on dbGame links to the CFBD game id used in /lines response.
+      const closingLine = dbGame.cfbd_id != null && closingLineByCfbdId[dbGame.cfbd_id] != null
+        ? closingLineByCfbdId[dbGame.cfbd_id]
+        : null;
+
       // games.home_score/away_score/status are shared fields the original
       // grading route also writes — safe to (idempotently) confirm here too
       // in case PSS grading runs before the original pipeline's grade step.
@@ -62,14 +97,14 @@ export async function POST(req) {
         home_score: g.homePoints,
         away_score: g.awayPoints,
         status: 'final',
-        closing_line: g.lines?.[0]?.spread ?? null,
+        closing_line: closingLine,
         updated_at: new Date().toISOString(),
       }).eq('id', dbGame.id);
 
       // Grade the PSS consensus pick for every game this week (not just qualifying plays).
       const { data: metrics } = await supabase
         .from('pss_game_metrics')
-        .select('id, edge, consensus_spread, vegas_line')
+        .select('id, edge, consensus_spread, vegas_line, opening_line')
         .eq('game_id', dbGame.id);
 
       for (const m of metrics || []) {
@@ -82,7 +117,18 @@ export async function POST(req) {
           ? (margin > vegasLine ? 'win' : margin < vegasLine ? 'loss' : 'push')
           : (margin < vegasLine ? 'win' : margin > vegasLine ? 'loss' : 'push');
         const atsMargin = pickSide === 'home' ? margin - vegasLine : vegasLine - margin;
-        const clv = vegasLine - (g.lines?.[0]?.spread ?? vegasLine);
+
+        // FIX: CLV = how much the line moved in our favour after we would have
+        // bet it. Positive CLV = closing line is worse for bettors (good for us).
+        // Formula (predictiontracker convention, positive = home favoured):
+        //   For a home pick: CLV = closing_line - opening_line (line drifted toward home = bad for us)
+        //   Simpler unified: CLV = line_at_bet (opening) - closing_line, signed for pick side.
+        // We store it as: closing_line - vegas_line (the line when we computed the pick).
+        // If closing_line is null (lines fetch failed), CLV stays null rather than 0.
+        const clv = closingLine != null
+          ? parseFloat((closingLine - vegasLine).toFixed(2))
+          : null;
+
         const consensusErr = (m.consensus_spread || 0) - margin;
 
         await supabase.from('pss_pick_grades').upsert({
@@ -90,7 +136,7 @@ export async function POST(req) {
           ats_result: atsResult,
           ats_margin: parseFloat(atsMargin.toFixed(2)),
           consensus_error: parseFloat(consensusErr.toFixed(2)),
-          clv: parseFloat(clv.toFixed(2)),
+          clv: clv,
           graded_at: new Date().toISOString(),
         }, { onConflict: 'pss_game_metrics_id' });
 
@@ -120,6 +166,7 @@ export async function POST(req) {
       games_matched: gamesMatched,
       metrics_graded: metricsGraded,
       picks_graded: picksGraded,
+      closing_lines_fetched: Object.keys(closingLineByCfbdId).length,
       unmatched,
     });
   } catch (e) {
