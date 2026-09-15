@@ -7,9 +7,32 @@ export default function Ingest() {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(false);
   const [log, setLog] = useState([]);
+  const [csvFile, setCsvFile] = useState(null);
 
   function addLog(msg, type = 'info') {
     setLog(prev => [...prev, { msg, type, t: new Date().toLocaleTimeString() }]);
+  }
+
+  async function uploadPredictions() {
+    if (!csvFile) { addLog('No file selected.', 'error'); return; }
+    setLoading(true); setStatus(null);
+    addLog(`Uploading ${csvFile.name} for ${season} Week ${week}…`);
+    try {
+      const form = new FormData();
+      form.append('file', csvFile);
+      const res = await fetch(`/api/upload-predictions?season=${season}&week=${week}`, {
+        method: 'POST',
+        body: form,
+      });
+      const data = await res.json();
+      if (data.error) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
+      else {
+        addLog(`Matched ${data.games_matched}/${data.games_in_csv} games — wrote ${data.predictions_written} predictions, ${data.opening_lines_written} opening lines.`, 'ok');
+        if (data.unmatched?.length) addLog(`Unmatched games (need team-match.js alias): ${data.unmatched.join(', ')}`, 'error');
+        setStatus('ok');
+      }
+    } catch (e) { addLog(`Network error: ${e.message}`, 'error'); setStatus('error'); }
+    finally { setLoading(false); }
   }
 
   async function runCFBDSync() {
@@ -151,8 +174,29 @@ export default function Ingest() {
             onClick={runCFBDSync}
             loading={loading}
           />
+
+          <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ width: 28, height: 28, borderRadius: '50%', background: '#38bd94', color: '#0b0e14', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 13, flexShrink: 0 }}>2</span>
+              <span style={{ fontWeight: 700, fontSize: 14 }}>Upload Predictions CSV</span>
+            </div>
+            <p style={{ margin: 0, fontSize: 12, color: '#8a92a3', lineHeight: 1.5 }}>
+              Upload the weekly predictiontracker CSV to write raw_predictions. Also writes opening_line back to the games table for CLV tracking. Re-upload a later version to pick up late-posting systems (Dokter Entropy, Max Newbury).
+            </p>
+            <input
+              type="file"
+              accept=".csv"
+              onChange={e => setCsvFile(e.target.files?.[0] || null)}
+              style={{ fontSize: 12, color: '#8a92a3' }}
+            />
+            {csvFile && <div style={{ fontSize: 11, color: '#38bd94' }}>Selected: {csvFile.name}</div>}
+            <button className="btn btn-primary" onClick={uploadPredictions} disabled={loading || !csvFile} style={{ fontSize: 13, marginTop: 'auto' }}>
+              {loading ? 'Uploading…' : 'Upload CSV'}
+            </button>
+          </div>
+
           <IngestStep
-            number={2}
+            number={3}
             title="Sync Team Logos"
             desc="Fill in any missing team_logos rows from CFBD's own logo CDN, matched the same way as CFBD Sync. Only fills gaps — never overwrites an existing logo. Shared by both models."
             action="Sync Logos"
@@ -160,7 +204,7 @@ export default function Ingest() {
             loading={loading}
           />
           <IngestStep
-            number={3}
+            number={4}
             title="Compute Engine"
             desc="Run the model-of-models engine on raw_predictions to produce game_metrics (consensus, edge, MSS, plays)."
             action="Run Compute"
@@ -168,7 +212,7 @@ export default function Ingest() {
             loading={loading}
           />
           <IngestStep
-            number={4}
+            number={5}
             title="Grade Results"
             desc="After games are final, pull scores from CFBD and grade all pick_grades and user_picks."
             action="Grade Results"
@@ -176,7 +220,7 @@ export default function Ingest() {
             loading={loading}
           />
           <IngestStep
-            number={5}
+            number={6}
             title="Recalibrate Models"
             desc="Grade every individual system against the completed weeks, blend 80% current-season / 20% 2021-2025 history, and write next week's Top-7 pool. Shared by both models."
             action="Recalibrate Models"
@@ -190,7 +234,7 @@ export default function Ingest() {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
           <IngestStep
-            number={6}
+            number={7}
             title="PSS Compute"
             desc="Run the Dynamic Top-K cascade (3→5→7) and Play Strength Score against the same weekly Top-7 pool, writing to pss_game_metrics."
             action="Run PSS Compute"
@@ -198,7 +242,7 @@ export default function Ingest() {
             loading={loading}
           />
           <IngestStep
-            number={7}
+            number={8}
             title="PSS Grade"
             desc="After games are final, grade pss_pick_grades and pss_user_picks against CFBD scores."
             action="Grade PSS Results"
@@ -228,11 +272,11 @@ export default function Ingest() {
       <div style={{ marginTop: 24 }} className="card">
         <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>Weekly Pipeline Reference</div>
         <ol style={{ color: '#8a92a3', fontSize: 13, lineHeight: 1.8, paddingLeft: 20, margin: 0 }}>
-          <li>Download the week's predictions CSV from thepredictiontracker.com</li>
-          <li>Paste the insert SQL into Supabase SQL Editor (raw_predictions batch insert)</li>
-          <li>Run CFBD Sync above to populate kickoff times, TV, and O/U</li>
-          <li>Run Compute Engine (original model) and/or PSS Compute (BobbyPSSModel) — both read the same games/raw_predictions/model_grades, so order between them doesn't matter</li>
-          <li>After games are played, set Week to that completed week, run Grade Results and/or PSS Grade, then run Recalibrate Models — this updates the shared Top-7 pool used by both models starting the following week</li>
+          <li>Run CFBD Sync to pull the week's schedule, kickoff times, TV, and O/U</li>
+          <li>Download the predictions CSV from thepredictiontracker.com and upload it using Step 2 above — re-upload a later version once Dokter Entropy and Max Newbury have posted</li>
+          <li>Run Sync Team Logos to fill any missing logos (optional, can be skipped)</li>
+          <li>Run Compute Engine (original MSS model) and PSS Compute (BobbyPSSModel) — both read the same games/raw_predictions/model_grades so order doesn't matter</li>
+          <li>After games are played, set Week to that completed week, run Grade Results and PSS Grade, then run Recalibrate Models to update the shared Top-7 pool for the following week</li>
         </ol>
       </div>
     </div>
