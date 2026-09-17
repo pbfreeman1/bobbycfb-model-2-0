@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { sbFetch, fmt, fmtKickoff, SUPABASE_URL, SUPABASE_ANON_KEY } from '../../../lib/supabase';
 
 const SB_HEADERS = {
@@ -678,13 +678,68 @@ function GameCard({ row, rank, expanded, onToggle, logos, plays, tags, onOpenPic
 }
 
 // ---------------------------------------------------------------------------
+// Multi-select filter dropdown (PSS Bin / PSS Play)
+// ---------------------------------------------------------------------------
+function MultiSelectFilter({ label, options, selected, onToggle, counts }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  const active = selected.size > 0;
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button onClick={() => setOpen((o) => !o)} style={{
+        ...FM, fontSize: 11.5, padding: '6px 12px', borderRadius: 3, cursor: 'pointer',
+        border: `1px solid ${active ? C.pss : C.border}`,
+        background: active ? `${C.pss}1A` : 'transparent',
+        color: active ? C.pss : C.sub,
+      }}>{label}{active ? ` (${selected.size})` : ''} ▾</button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 20, minWidth: 180,
+          background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, padding: 6,
+          boxShadow: '0 4px 14px rgba(0,0,0,0.4)',
+        }}>
+          {options.map((opt) => {
+            const isChecked = selected.has(opt.value);
+            return (
+              <label key={opt.value} style={{
+                ...FM, fontSize: 11.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                padding: '6px 8px', borderRadius: 3, cursor: 'pointer', color: isChecked ? C.pss : C.text,
+              }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input type="checkbox" checked={isChecked} onChange={() => onToggle(opt.value)} style={{ margin: 0, cursor: 'pointer' }} />
+                  {opt.label}
+                </span>
+                <span style={{ color: C.sub }}>{counts[opt.value] ?? 0}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Top-level dashboard
 // ---------------------------------------------------------------------------
 const FILTERS = [
   { key: 'all', label: 'All Games' },
   { key: 'model', label: 'Model Plays' },
   { key: 'mine', label: "Bobby's Plays" },
-  { key: 'elite', label: 'Elite Only' },
+];
+const PSS_BIN_FILTER_OPTIONS = PSS_BIN_ORDER.filter((b) => b !== 'No Play').map((b) => ({ value: b, label: b }));
+const PSS_PLAY_FILTER_OPTIONS = [
+  { value: 'BET', label: 'Bet' },
+  { value: 'CONSIDER', label: 'Consider' },
+  { value: 'WATCH', label: 'Watch' },
 ];
 
 export default function Dashboard() {
@@ -697,6 +752,8 @@ export default function Dashboard() {
 
   const [expandedIds, setExpandedIds] = useState(new Set());
   const [filter, setFilter] = useState('all');
+  const [pssBinFilter, setPssBinFilter] = useState(new Set());
+  const [pssPlayFilter, setPssPlayFilter] = useState(new Set());
   const [teamSearch, setTeamSearch] = useState('');
   const [sortBy, setSortBy] = useState('pss');
 
@@ -825,14 +882,29 @@ export default function Dashboard() {
     all: rows.length,
     model: rows.filter((r) => r.pm?.decision === 'BET').length,
     mine: rows.filter((r) => (picksByGame[r.game.id] || []).length > 0).length,
-    elite: rows.filter((r) => r.pm?.pss_bin === 'Elite').length,
   }), [rows, picksByGame]);
+
+  const pssBinCounts = useMemo(() => {
+    const c = {};
+    for (const opt of PSS_BIN_FILTER_OPTIONS) c[opt.value] = rows.filter((r) => r.pm?.pss_bin === opt.value).length;
+    return c;
+  }, [rows]);
+  const pssPlayCounts = useMemo(() => {
+    const c = {};
+    for (const opt of PSS_PLAY_FILTER_OPTIONS) c[opt.value] = rows.filter((r) => r.pm?.decision === opt.value).length;
+    return c;
+  }, [rows]);
+
+  function toggleSetValue(setter, value) {
+    setter((prev) => { const n = new Set(prev); n.has(value) ? n.delete(value) : n.add(value); return n; });
+  }
 
   const displayed = useMemo(() => {
     let list = rows.filter((r) => {
       if (filter === 'model' && r.pm?.decision !== 'BET') return false;
       if (filter === 'mine' && (picksByGame[r.game.id] || []).length === 0) return false;
-      if (filter === 'elite' && r.pm?.pss_bin !== 'Elite') return false;
+      if (pssBinFilter.size > 0 && !pssBinFilter.has(r.pm?.pss_bin)) return false;
+      if (pssPlayFilter.size > 0 && !pssPlayFilter.has(r.pm?.decision)) return false;
       if (teamSearch.trim()) {
         const q = teamSearch.trim().toLowerCase();
         if (!r.game.home_team.toLowerCase().includes(q) && !r.game.away_team.toLowerCase().includes(q)) return false;
@@ -845,7 +917,7 @@ export default function Dashboard() {
       return (b.pm?.pss ?? -Infinity) - (a.pm?.pss ?? -Infinity);
     });
     return list;
-  }, [rows, filter, teamSearch, sortBy, picksByGame]);
+  }, [rows, filter, pssBinFilter, pssPlayFilter, teamSearch, sortBy, picksByGame]);
 
   const selectStyle = { ...FM, fontSize: 11.5, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, padding: '7px 9px', color: C.text, cursor: 'pointer' };
 
@@ -907,6 +979,20 @@ export default function Dashboard() {
                   color: filter === f.key ? C.pss : C.sub,
                 }}>{f.label} ({counts[f.key]})</button>
               ))}
+              <MultiSelectFilter
+                label="PSS Bin"
+                options={PSS_BIN_FILTER_OPTIONS}
+                selected={pssBinFilter}
+                onToggle={(v) => toggleSetValue(setPssBinFilter, v)}
+                counts={pssBinCounts}
+              />
+              <MultiSelectFilter
+                label="PSS Play"
+                options={PSS_PLAY_FILTER_OPTIONS}
+                selected={pssPlayFilter}
+                onToggle={(v) => toggleSetValue(setPssPlayFilter, v)}
+                counts={pssPlayCounts}
+              />
               <input
                 type="text" placeholder="Search team…" value={teamSearch}
                 onChange={(e) => setTeamSearch(e.target.value)}
