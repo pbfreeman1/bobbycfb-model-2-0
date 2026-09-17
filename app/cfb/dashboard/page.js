@@ -14,13 +14,13 @@ const FM = { fontFamily: "'IBM Plex Mono', 'Courier New', monospace" };
 const C = {
   bg: '#0F1412', surface: '#161D1A', surface2: '#1B2320', border: '#2A332E',
   text: '#EDEFE8', sub: '#8B9992', pss: '#D4A73C', agree: '#6FBF73', warn: '#C4573F', dim: '#5B655F',
+  mine: '#5B9BD4',
 };
 
 const PSS_BIN_ORDER = ['Elite', 'Very Strong', 'Strong', 'Moderate', 'No Play'];
 const DECISION_COLOR = { BET: C.agree, CONSIDER: C.pss, WATCH: C.sub, REVIEW: C.warn, PASS: C.dim };
 const PSS_BIN_COLOR = { Elite: C.agree, 'Very Strong': C.pss, Strong: '#C4933A', Moderate: '#8B7355', 'No Play': C.dim };
 const TIER_LABEL = { top3: 'Top-3', top5: 'Top-5', top7: 'Top-7' };
-const RESEARCH_TAG_OPTIONS = ['Trap Game', 'Revenge Spot', 'Letdown Spot', 'Weather Factor', 'Injury Watch', 'Public Fade'];
 
 // ---------------------------------------------------------------------------
 // Line-sign helpers — stored lines are positive = home favored.
@@ -48,6 +48,13 @@ function pssPick(pm, homeTeam, awayTeam) {
   const side = pm.suggested_side;
   const team = side === 'home' ? homeTeam : awayTeam;
   return { side, team, num: spreadForSide(pm.consensus_spread, side) };
+}
+function researchSideLabel(r, home, away) {
+  if (r.pick_side === 'home') return home;
+  if (r.pick_side === 'away') return away;
+  if (r.pick_side === 'over') return 'Over';
+  if (r.pick_side === 'under') return 'Under';
+  return r.pick_side;
 }
 function playLabel(pick, home, away) {
   const type = pick.pick_type;
@@ -345,6 +352,15 @@ function pctStr(record) {
   if (decided === 0) return '—';
   return `${((record.wins / decided) * 100).toFixed(1)}%`;
 }
+// Standard -110 vig: a win nets units/1.1, a loss costs the full unit stake, a push is flat.
+function netUnitsFor(gradedPicks) {
+  return gradedPicks.reduce((sum, p) => {
+    const u = parseFloat(p.units) || 0;
+    if (p.result === 'win') return sum + u / 1.1;
+    if (p.result === 'loss') return sum - u;
+    return sum;
+  }, 0);
+}
 function bucketBy(graded, keyFn, order) {
   const map = new Map();
   for (const m of graded) {
@@ -359,7 +375,8 @@ function bucketBy(graded, keyFn, order) {
 // ---------------------------------------------------------------------------
 // My Card modal
 // ---------------------------------------------------------------------------
-function MyCardModal({ rows, picksByGame, onClose }) {
+function MyCardModal({ rows, picksByGame, season, onClose }) {
+  const [tab, setTab] = useState('week');
   const entries = rows.map((r) => {
     const plays = picksByGame[r.game.id] || [];
     return { r, plays };
@@ -368,35 +385,150 @@ function MyCardModal({ rows, picksByGame, onClose }) {
   const totalUnits = entries.flatMap((e) => e.plays).reduce((sum, p) => sum + (parseFloat(p.units) || 0), 0);
 
   return (
-    <Modal title="My card — this week" onClose={onClose} wide>
-      <div style={{ ...FM, fontSize: 12, color: C.sub, marginBottom: 16 }}>
-        {entries.length} games · {entries.reduce((n, e) => n + e.plays.length, 0)} plays · {totalUnits.toFixed(1)}u total exposure
+    <Modal title="My card" onClose={onClose} wide>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: `1px solid ${C.border}` }}>
+        {[['week', 'This week'], ['results', "Bobby's Pick Results"]].map(([t, label]) => (
+          <button key={t} onClick={() => setTab(t)} style={{
+            ...FM, fontSize: 12, background: 'none', border: 'none', cursor: 'pointer',
+            color: tab === t ? C.pss : C.sub, borderBottom: `2px solid ${tab === t ? C.pss : 'transparent'}`,
+            padding: '8px 14px', fontWeight: tab === t ? 700 : 400,
+          }}>{label}</button>
+        ))}
       </div>
-      {entries.length === 0 && <div style={{ ...FM, fontSize: 12, color: C.sub }}>No plays logged yet — use "+ Add Pick" on any game card.</div>}
-      {entries.map(({ r, plays }) => {
-        const home = r.game.home_team, away = r.game.away_team;
-        return (
-          <div key={r.game.id} style={{ padding: '10px 0', borderBottom: `1px solid ${C.border}` }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
-              <div style={{ ...FH, fontSize: 13, color: C.text }}>{away} @ {home}</div>
-              <span style={{ ...FM, fontSize: 11, color: C.sub }}>{fmtKickoff(r.game.kickoff_at)}</span>
-              {r.game.tv_network && <span style={{ ...FM, fontSize: 11, color: C.sub }}>{r.game.tv_network}</span>}
-            </div>
-            {plays.map((pk) => (
-              <div key={pk.id} style={{
-                ...FM, fontSize: 12, color: C.sub, display: 'flex', gap: 10, alignItems: 'center', padding: '2px 6px',
-                ...(pk.is_lock ? { background: 'rgba(212,167,60,0.12)', border: '1px solid rgba(212,167,60,0.35)', borderRadius: 4 } : {}),
-              }}>
-                {pk.is_lock && <span style={{ fontSize: 11 }}>🔒</span>}
-                <span style={{ color: C.agree }}>{(parseFloat(pk.units) || 1).toFixed(pk.units % 1 === 0 ? 0 : 1)}u</span>
-                <span style={{ color: pk.is_lock ? C.pss : C.text, fontWeight: pk.is_lock ? 700 : 400 }}>{playLabel(pk, home, away)}</span>
-                {pk.note && <span style={{ fontSize: 10.5, color: C.dim }}>· {pk.note}</span>}
+
+      {tab === 'week' && (
+        <>
+          <div style={{ ...FM, fontSize: 12, color: C.sub, marginBottom: 16 }}>
+            {entries.length} games · {entries.reduce((n, e) => n + e.plays.length, 0)} plays · {totalUnits.toFixed(1)}u total exposure
+          </div>
+          {entries.length === 0 && <div style={{ ...FM, fontSize: 12, color: C.sub }}>No plays logged yet — use "+ Add Pick" on any game card.</div>}
+          {entries.map(({ r, plays }) => {
+            const home = r.game.home_team, away = r.game.away_team;
+            return (
+              <div key={r.game.id} style={{ padding: '10px 0', borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                  <div style={{ ...FH, fontSize: 13, color: C.text }}>{away} @ {home}</div>
+                  <span style={{ ...FM, fontSize: 11, color: C.sub }}>{fmtKickoff(r.game.kickoff_at)}</span>
+                  {r.game.tv_network && <span style={{ ...FM, fontSize: 11, color: C.sub }}>{r.game.tv_network}</span>}
+                </div>
+                {plays.map((pk) => (
+                  <div key={pk.id} style={{
+                    ...FM, fontSize: 12, color: C.sub, display: 'flex', gap: 10, alignItems: 'center', padding: '2px 6px',
+                    ...(pk.is_lock ? { background: 'rgba(212,167,60,0.12)', border: '1px solid rgba(212,167,60,0.35)', borderRadius: 4 } : {}),
+                  }}>
+                    {pk.is_lock && <span style={{ fontSize: 11 }}>🔒</span>}
+                    <span style={{ color: C.agree }}>{(parseFloat(pk.units) || 1).toFixed(pk.units % 1 === 0 ? 0 : 1)}u</span>
+                    <span style={{ color: pk.is_lock ? C.pss : C.text, fontWeight: pk.is_lock ? 700 : 400 }}>{playLabel(pk, home, away)}</span>
+                    {pk.note && <span style={{ fontSize: 10.5, color: C.dim }}>· {pk.note}</span>}
+                  </div>
+                ))}
               </div>
-            ))}
+            );
+          })}
+        </>
+      )}
+
+      {tab === 'results' && <PickResultsTab season={season} />}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Bobby's Pick Results — season record, net units, week-by-week breakdown.
+// Net units assumes standard -110 vig on every pick (win=+units/1.1,
+// loss=-units, push=0) since user_picks has no stored odds/price field.
+// ---------------------------------------------------------------------------
+function PickResultsTab({ season }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [picks, setPicks] = useState([]);
+  const [expandedWeeks, setExpandedWeeks] = useState(new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const rows = await sbFetch(`user_picks?select=*,games(home_team,away_team)&season=eq.${season}&pick_type=neq.note&status=neq.lean&order=week.desc,created_at.asc`);
+        if (!cancelled) setPicks(rows);
+      } catch (e) {
+        if (!cancelled) setError(String(e.message || e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [season]);
+
+  const graded = picks.filter((p) => p.result === 'win' || p.result === 'loss' || p.result === 'push');
+  const record = tally(graded.map((p) => p.result));
+  const netUnits = netUnitsFor(graded);
+
+  const byWeek = useMemo(() => {
+    const map = new Map();
+    for (const p of picks) {
+      if (!map.has(p.week)) map.set(p.week, []);
+      map.get(p.week).push(p);
+    }
+    return Array.from(map.entries()).sort((a, b) => b[0] - a[0]);
+  }, [picks]);
+
+  function toggleWeek(w) {
+    setExpandedWeeks((prev) => { const n = new Set(prev); n.has(w) ? n.delete(w) : n.add(w); return n; });
+  }
+
+  if (loading) return <div style={{ ...FM, fontSize: 12, color: C.sub }}>Loading…</div>;
+  if (error) return <div style={{ ...FM, fontSize: 12, color: C.warn }}>{error}</div>;
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 28, marginBottom: 20 }}>
+        <Stat label="SEASON RECORD" value={recordStr(record)} size={18} />
+        <Stat label="ATS %" value={pctStr(record)} size={18} color={C.agree} />
+        <Stat label="NET UNITS" value={`${netUnits >= 0 ? '+' : ''}${netUnits.toFixed(2)}u`} size={18} color={netUnits >= 0 ? C.agree : C.warn} />
+      </div>
+      {byWeek.length === 0 && <div style={{ ...FM, fontSize: 12, color: C.sub }}>No picks logged this season yet.</div>}
+      {byWeek.map(([w, weekPicks]) => {
+        const weekGraded = weekPicks.filter((p) => p.result === 'win' || p.result === 'loss' || p.result === 'push');
+        const weekRecord = tally(weekGraded.map((p) => p.result));
+        const weekNetUnits = netUnitsFor(weekGraded);
+        const expanded = expandedWeeks.has(w);
+        return (
+          <div key={w} style={{ borderBottom: `1px solid ${C.border}` }}>
+            <button onClick={() => toggleWeek(w)} style={{
+              width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              background: 'none', border: 'none', cursor: 'pointer', padding: '10px 0', color: C.text,
+            }}>
+              <span style={{ ...FH, fontSize: 13 }}>Week {w}</span>
+              <span style={{ ...FM, fontSize: 12, color: C.sub, display: 'flex', gap: 10, alignItems: 'center' }}>
+                {weekPicks.length} pick{weekPicks.length !== 1 ? 's' : ''} · {recordStr(weekRecord)} ·{' '}
+                <span style={{ color: weekNetUnits >= 0 ? C.agree : C.warn }}>{weekNetUnits >= 0 ? '+' : ''}{weekNetUnits.toFixed(2)}u</span>
+                <span style={{ display: 'inline-block', transition: 'transform 0.15s', transform: expanded ? 'rotate(180deg)' : 'none' }}>▼</span>
+              </span>
+            </button>
+            {expanded && (
+              <div style={{ paddingBottom: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {weekPicks.map((p) => {
+                  const g = p.games;
+                  const home = g?.home_team, away = g?.away_team;
+                  const resultColor = p.result === 'win' ? C.agree : p.result === 'loss' ? C.warn : p.result === 'push' ? C.pss : C.dim;
+                  return (
+                    <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', ...FM, fontSize: 12 }}>
+                      <span style={{ color: C.text }}>
+                        {p.is_custom
+                          ? p.custom_label
+                          : (home && away ? `${playLabel(p, home, away)} — ${away} @ ${home}` : playLabel(p, home || '', away || ''))}
+                      </span>
+                      <span style={{ color: resultColor, fontWeight: 700 }}>{p.result ? p.result.toUpperCase() : 'PENDING'}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         );
       })}
-    </Modal>
+    </div>
   );
 }
 
@@ -511,39 +643,56 @@ function PickModal({ game, existing, onClose, onSaved, onDeleted }) {
 }
 
 // ---------------------------------------------------------------------------
-// Research tag modal — multi-select, writes/deletes rows in game_tags.
+// Research pick modal — same field set/write path as "Record a Pick from
+// Research" on /cfb/research (research_picks table), Game pre-filled to the
+// card's game.
 // ---------------------------------------------------------------------------
-function TagModal({ game, existingTags, onClose, onSaved }) {
-  const [selected, setSelected] = useState(new Set((existingTags || []).map((t) => t.tag)));
+function ResearchPickModal({ game, onClose, onSaved }) {
+  const [pickSide, setPickSide] = useState('home');
+  const [pickType, setPickType] = useState('spread');
+  const [source, setSource] = useState('');
+  const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
 
-  function toggle(tag) {
-    setSelected((prev) => { const n = new Set(prev); n.has(tag) ? n.delete(tag) : n.add(tag); return n; });
-  }
   async function handleSave() {
     setSaving(true);
-    try { await onSaved(Array.from(selected)); } finally { setSaving(false); }
+    try {
+      await onSaved({ pick_side: pickSide, pick_type: pickType, source_label: source.trim() || null, note: note.trim() || null });
+    } finally { setSaving(false); }
   }
 
+  const selStyle = { ...FM, fontSize: 13, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, padding: '8px 10px', color: C.text, width: '100%', boxSizing: 'border-box' };
+
   return (
-    <Modal title={`Tag — ${game.away_team} @ ${game.home_team}`} onClose={onClose}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
-        {RESEARCH_TAG_OPTIONS.map((tag) => {
-          const active = selected.has(tag);
-          return (
-            <button key={tag} onClick={() => toggle(tag)} style={{
-              ...FM, fontSize: 12, padding: '7px 12px', borderRadius: 16, cursor: 'pointer',
-              border: `1px solid ${active ? C.pss : C.border}`,
-              background: active ? `${C.pss}1F` : 'transparent',
-              color: active ? C.pss : C.sub,
-            }}>{tag}</button>
-          );
-        })}
+    <Modal title={`Research pick — ${game.away_team} @ ${game.home_team}`} onClose={onClose}>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: C.sub, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Side</div>
+        <select style={selStyle} value={pickSide} onChange={(e) => setPickSide(e.target.value)}>
+          <option value="home">{game.home_team} (Home)</option>
+          <option value="away">{game.away_team} (Away)</option>
+          <option value="over">Over{game.over_under != null ? ` ${game.over_under}` : ''}</option>
+          <option value="under">Under{game.over_under != null ? ` ${game.over_under}` : ''}</option>
+        </select>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: C.sub, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Type</div>
+        <select style={selStyle} value={pickType} onChange={(e) => setPickType(e.target.value)}>
+          <option value="spread">Spread (ATS)</option>
+          <option value="total">Total (O/U)</option>
+        </select>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: C.sub, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Source</div>
+        <input style={selStyle} placeholder="e.g. Action Network" value={source} onChange={(e) => setSource(e.target.value)} />
+      </div>
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 11, color: C.sub, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Note</div>
+        <input style={selStyle} placeholder="Optional" value={note} onChange={(e) => setNote(e.target.value)} />
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
         <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
         <button onClick={handleSave} disabled={saving} style={{ flex: 2, padding: '9px 0', borderRadius: 8, border: 'none', background: C.pss, color: '#0F1412', cursor: saving ? 'default' : 'pointer', fontSize: 13, fontWeight: 700 }}>
-          {saving ? 'Saving…' : 'Save Tags'}
+          {saving ? 'Saving…' : 'Save Pick'}
         </button>
       </div>
     </Modal>
@@ -553,12 +702,14 @@ function TagModal({ game, existingTags, onClose, onSaved }) {
 // ---------------------------------------------------------------------------
 // Game card
 // ---------------------------------------------------------------------------
-function GameCard({ row, rank, expanded, onToggle, logos, plays, tags, onOpenPickModal, onOpenTagModal }) {
+function GameCard({ row, rank, expanded, onToggle, logos, plays, research, onOpenPickModal, onOpenResearchModal, onRemoveResearch }) {
   const { game, pm } = row;
   const home = game.home_team, away = game.away_team;
   const pp = pssPick(pm, home, away);
   const isElite = pm?.pss_bin === 'Elite';
   const isBet = pm?.decision === 'BET';
+  const showBinBadge = pm?.pss_bin && pm.pss_bin !== 'No Play';
+  const showDecisionBadge = ['BET', 'CONSIDER', 'WATCH'].includes(pm?.decision);
   const borderColor = isElite && isBet ? C.pss : isBet ? C.agree : C.border;
   const fav = favorite(game.current_line);
 
@@ -603,16 +754,20 @@ function GameCard({ row, rank, expanded, onToggle, logos, plays, tags, onOpenPic
                     <span style={{ ...FH, fontSize: 10.5, color: C.sub }}>PSS PICK</span>
                     <span style={{ ...FM, fontSize: 13, color: C.text }}>{pp ? favored(pp.team, pp.num) : '—'}</span>
                     <Badge color={DECISION_COLOR[pm.decision] || C.dim} filled>{fmt(pm.pss, 1)}</Badge>
+                    <span style={{ ...FM, fontSize: 11, color: C.sub }}>Edge {fmt(pm.edge, 1)} · STD {fmt(pm.stddev, 1)}</span>
                   </>
                 ) : (
                   <span style={{ ...FM, fontSize: 12, color: C.dim }}>PSS not computed yet</span>
                 )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                {isElite && <Badge color={C.pss} filled>ELITE</Badge>}
-                {isBet && <Badge color={C.agree} filled>BET</Badge>}
-                {(tags || []).map((t) => (
-                  <span key={t.id} style={{ ...FM, fontSize: 10.5, padding: '2px 8px', borderRadius: 10, border: `1px solid ${C.border}`, color: C.sub }}>{t.tag}</span>
+                {showBinBadge && <Badge color={PSS_BIN_COLOR[pm.pss_bin]} filled>{pm.pss_bin.toUpperCase()}</Badge>}
+                {showDecisionBadge && <Badge color={DECISION_COLOR[pm.decision]} filled>MODEL - {pm.decision}</Badge>}
+                {(research || []).map((r) => (
+                  <span key={r.id} style={{ ...FM, fontSize: 10.5, padding: '2px 6px 2px 8px', borderRadius: 10, border: `1px solid ${C.border}`, color: C.sub, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    {researchSideLabel(r, home, away)}{r.source_label ? ` · ${r.source_label}` : ''}
+                    <button onClick={() => onRemoveResearch(r.id)} style={{ background: 'none', border: 'none', color: C.dim, cursor: 'pointer', fontSize: 10, padding: 0, lineHeight: 1 }}>✕</button>
+                  </span>
                 ))}
                 {(plays || []).length === 0 ? (
                   <button onClick={() => onOpenPickModal(null)} style={{ ...FM, fontSize: 10.5, padding: '3px 9px', borderRadius: 10, border: `1px dashed ${C.agree}`, background: 'transparent', color: C.agree, cursor: 'pointer' }}>
@@ -620,13 +775,13 @@ function GameCard({ row, rank, expanded, onToggle, logos, plays, tags, onOpenPic
                   </button>
                 ) : (
                   (plays || []).map((p) => (
-                    <button key={p.id} onClick={() => onOpenPickModal(p)} style={{ ...FM, fontSize: 10.5, padding: '3px 9px', borderRadius: 10, border: `1px solid ${C.agree}`, background: `${C.agree}14`, color: C.agree, cursor: 'pointer' }}>
-                      {(parseFloat(p.units) || 1).toFixed(p.units % 1 === 0 ? 0 : 1)}u {playLabel(p, home, away)} · edit
+                    <button key={p.id} onClick={() => onOpenPickModal(p)} style={{ ...FM, fontSize: 10.5, padding: '3px 9px', borderRadius: 10, border: `1px solid ${C.mine}`, background: `${C.mine}14`, color: C.mine, cursor: 'pointer' }}>
+                      BOBBY PICK · {(parseFloat(p.units) || 1).toFixed(p.units % 1 === 0 ? 0 : 1)}u {playLabel(p, home, away)}
                     </button>
                   ))
                 )}
-                <button onClick={onOpenTagModal} style={{ ...FM, fontSize: 10.5, padding: '3px 9px', borderRadius: 10, border: `1px dashed ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer' }}>
-                  + Tag
+                <button onClick={onOpenResearchModal} style={{ ...FM, fontSize: 10.5, padding: '3px 9px', borderRadius: 10, border: `1px dashed ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer' }}>
+                  + Research
                 </button>
               </div>
             </div>
@@ -758,9 +913,9 @@ export default function Dashboard() {
   const [sortBy, setSortBy] = useState('pss');
 
   const [picksByGame, setPicksByGame] = useState({});
-  const [tagsByGame, setTagsByGame] = useState({});
+  const [researchByGame, setResearchByGame] = useState({});
   const [pickModal, setPickModal] = useState(null); // { row, existing }
-  const [tagModalRow, setTagModalRow] = useState(null);
+  const [researchModalRow, setResearchModalRow] = useState(null);
   const [showLegend, setShowLegend] = useState(false);
   const [showStats, setShowStats] = useState(false);
   const [showCard, setShowCard] = useState(false);
@@ -805,17 +960,17 @@ export default function Dashboard() {
           setPicksByGame(grouped);
         } catch (e) { console.error('Failed to load picks:', e); setPicksByGame({}); }
         try {
-          const tags = await sbFetch(`game_tags?select=*&game_id=in.(${ids})&order=created_at.asc`);
+          const research = await sbFetch(`research_picks?select=*&game_id=in.(${ids})&order=created_at.asc`);
           const grouped = {};
-          for (const t of tags) {
-            if (!grouped[t.game_id]) grouped[t.game_id] = [];
-            grouped[t.game_id].push(t);
+          for (const r of research) {
+            if (!grouped[r.game_id]) grouped[r.game_id] = [];
+            grouped[r.game_id].push(r);
           }
-          setTagsByGame(grouped);
-        } catch (e) { console.error('Failed to load tags:', e); setTagsByGame({}); }
+          setResearchByGame(grouped);
+        } catch (e) { console.error('Failed to load research picks:', e); setResearchByGame({}); }
       } else {
         setPicksByGame({});
-        setTagsByGame({});
+        setResearchByGame({});
       }
     } catch (e) {
       setError(String(e.message || e));
@@ -853,22 +1008,17 @@ export default function Dashboard() {
     setPickModal(null);
   }
 
-  async function saveTags(gameId, home, away, selectedTags) {
-    const current = tagsByGame[gameId] || [];
-    const currentTags = current.map((t) => t.tag);
-    const toAdd = selectedTags.filter((t) => !currentTags.includes(t));
-    const toRemove = current.filter((t) => !selectedTags.includes(t.tag));
-    const created = [];
-    for (const tag of toAdd) {
-      const [row] = await sbFetch(`game_tags`, { method: 'POST', body: JSON.stringify({ game_id: gameId, season, week, tag }) });
-      created.push(row);
-    }
-    for (const t of toRemove) {
-      await sbFetch(`game_tags?id=eq.${t.id}`, { method: 'DELETE' });
-    }
-    const remaining = current.filter((t) => selectedTags.includes(t.tag));
-    setTagsByGame((prev) => ({ ...prev, [gameId]: [...remaining, ...created] }));
-    setTagModalRow(null);
+  async function saveResearchPick(gameId, home, away, data) {
+    const [created] = await sbFetch(`research_picks`, {
+      method: 'POST',
+      body: JSON.stringify({ game_id: gameId, season, week, home_team: home, away_team: away, ...data }),
+    });
+    setResearchByGame((prev) => ({ ...prev, [gameId]: [...(prev[gameId] || []), created] }));
+    setResearchModalRow(null);
+  }
+  async function removeResearchPick(gameId, id) {
+    await sbFetch(`research_picks?id=eq.${id}`, { method: 'DELETE' });
+    setResearchByGame((prev) => ({ ...prev, [gameId]: (prev[gameId] || []).filter((r) => r.id !== id) }));
   }
 
   const pssRankMap = useMemo(() => {
@@ -928,7 +1078,7 @@ export default function Dashboard() {
       <div style={{ maxWidth: 1000, margin: '0 auto' }}>
         {showLegend && <LegendModal onClose={() => setShowLegend(false)} />}
         {showStats && week != null && <SeasonStatsModal season={season} week={week} onClose={() => setShowStats(false)} />}
-        {showCard && <MyCardModal rows={rows} picksByGame={picksByGame} onClose={() => setShowCard(false)} />}
+        {showCard && <MyCardModal rows={rows} picksByGame={picksByGame} season={season} onClose={() => setShowCard(false)} />}
         {pickModal && (
           <PickModal
             game={pickModal.row.game}
@@ -938,12 +1088,11 @@ export default function Dashboard() {
             onDeleted={() => deletePick(pickModal.row.game.id)}
           />
         )}
-        {tagModalRow && (
-          <TagModal
-            game={tagModalRow.game}
-            existingTags={tagsByGame[tagModalRow.game.id]}
-            onClose={() => setTagModalRow(null)}
-            onSaved={(selectedTags) => saveTags(tagModalRow.game.id, tagModalRow.game.home_team, tagModalRow.game.away_team, selectedTags)}
+        {researchModalRow && (
+          <ResearchPickModal
+            game={researchModalRow.game}
+            onClose={() => setResearchModalRow(null)}
+            onSaved={(data) => saveResearchPick(researchModalRow.game.id, researchModalRow.game.home_team, researchModalRow.game.away_team, data)}
           />
         )}
 
@@ -1014,9 +1163,10 @@ export default function Dashboard() {
                 onToggle={() => toggle(r.game.id)}
                 logos={logos}
                 plays={picksByGame[r.game.id]}
-                tags={tagsByGame[r.game.id]}
+                research={researchByGame[r.game.id]}
                 onOpenPickModal={(existing) => setPickModal({ row: r, existing })}
-                onOpenTagModal={() => setTagModalRow(r)}
+                onOpenResearchModal={() => setResearchModalRow(r)}
+                onRemoveResearch={(id) => removeResearchPick(r.game.id, id)}
               />
             ))}
             {displayed.length === 0 && <div style={{ ...FM, fontSize: 12, color: C.sub, padding: '20px 0' }}>No games match these filters.</div>}
