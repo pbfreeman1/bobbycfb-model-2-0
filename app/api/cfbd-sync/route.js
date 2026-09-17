@@ -20,7 +20,7 @@ export async function GET(req) {
 
   try {
     const [gamesRes, mediaRes, linesRes] = await Promise.all([
-      fetch(`https://api.collegefootballdata.com/games?year=${season}&week=${week}&seasonType=regular&division=fbs`, { headers }),
+      fetch(`https://api.collegefootballdata.com/games?year=${season}&week=${week}&seasonType=regular&classification=fbs`, { headers }),
       fetch(`https://api.collegefootballdata.com/games/media?year=${season}&week=${week}&seasonType=regular`, { headers }),
       fetch(`https://api.collegefootballdata.com/lines?year=${season}&week=${week}&seasonType=regular`, { headers }),
     ]);
@@ -69,10 +69,17 @@ export async function GET(req) {
     const dbByKey = new Map();
     for (const g of dbGames || []) dbByKey.set(matchKey(g.home_team, g.away_team), g);
 
+    // CFBD's `classification` filter only requires one side of the game to
+    // match, so FBS-vs-FCS "buy games" still come through. homeClassification
+    // / awayClassification are returned directly on each game object (per
+    // CFBD's /games response schema) — require both sides to be FBS.
+    const fbsGames = cfbdGames.filter((g) => g.homeClassification === 'fbs' && g.awayClassification === 'fbs');
+    const skippedFcs = cfbdGames.length - fbsGames.length;
+
     let updated = 0, inserted = 0;
     const unmatched = [];
 
-    for (const g of cfbdGames) {
+    for (const g of fbsGames) {
       const rawKey = `${g.homeTeam}|${g.awayTeam}`;
       const dbGame = dbByKey.get(matchKey(g.homeTeam, g.awayTeam));
 
@@ -93,14 +100,14 @@ export async function GET(req) {
             external_game_id: String(g.id),
             opening_line: openingLine,
             current_line: currentLine,
+            home_classification: g.homeClassification,
+            away_classification: g.awayClassification,
             updated_at: new Date().toISOString(),
           })
           .eq('id', dbGame.id);
         if (!error) updated++;
       } else {
         // Game doesn't exist yet — insert it
-        // Only insert FBS games (CFBD /games?division=fbs already filters this,
-        // but guard against edge cases)
         if (!g.homeTeam || !g.awayTeam) continue;
 
         const { error } = await supabase
@@ -116,6 +123,8 @@ export async function GET(req) {
             external_game_id: String(g.id),
             opening_line: openingLine,
             current_line: currentLine,
+            home_classification: g.homeClassification,
+            away_classification: g.awayClassification,
             status: 'scheduled',
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
@@ -129,7 +138,7 @@ export async function GET(req) {
       }
     }
 
-    return Response.json({ games: cfbdGames.length, updated, inserted, unmatched });
+    return Response.json({ games: fbsGames.length, skippedFcs, updated, inserted, unmatched });
   } catch (e) {
     return Response.json({ error: e.message }, { status: 500 });
   }
