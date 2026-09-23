@@ -59,7 +59,7 @@ export async function POST(req) {
 
     const { data: dbGames, error: dbGamesErr } = await supabase
       .from('games')
-      .select('id, home_team, away_team, current_line, cfbd_id')
+      .select('id, home_team, away_team, current_line, external_game_id')
       .eq('season', season)
       .eq('week', week);
     if (dbGamesErr) return Response.json({ error: dbGamesErr.message }, { status: 500 });
@@ -85,9 +85,9 @@ export async function POST(req) {
 
       // Resolve closing line: use the CFBD /lines fetch result if available,
       // otherwise fall back to current_line already stored in games table.
-      // cfbd_id on dbGame links to the CFBD game id used in /lines response.
-      const closingLine = dbGame.cfbd_id != null && closingLineByCfbdId[dbGame.cfbd_id] != null
-        ? closingLineByCfbdId[dbGame.cfbd_id]
+      // external_game_id on dbGame links to the CFBD game id used in /lines response.
+      const closingLine = dbGame.external_game_id != null && closingLineByCfbdId[dbGame.external_game_id] != null
+        ? closingLineByCfbdId[dbGame.external_game_id]
         : null;
 
       // games.home_score/away_score/status are shared fields the original

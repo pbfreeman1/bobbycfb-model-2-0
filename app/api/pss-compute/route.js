@@ -69,7 +69,7 @@ export async function POST(req) {
             // CFBD lines endpoint returns provider-specific lines; use consensus or first available
             const openingByGameId = {};
             for (const l of linesData) {
-              // Match by CFBD game id — games table stores cfbd_id
+              // Match by CFBD game id — games table stores external_game_id
               const line = l.lines?.find((ln) => ln.provider === 'consensus') || l.lines?.[0];
               if (line?.spreadOpen != null) {
                 openingByGameId[l.id] = parseFloat(line.spreadOpen);
@@ -79,11 +79,11 @@ export async function POST(req) {
             for (const game of missingOpeningLine) {
               const { data: gameRow } = await supabase
                 .from('games')
-                .select('cfbd_id')
+                .select('external_game_id')
                 .eq('id', game.id)
                 .single();
-              if (gameRow?.cfbd_id && openingByGameId[gameRow.cfbd_id] != null) {
-                const openLine = openingByGameId[gameRow.cfbd_id];
+              if (gameRow?.external_game_id && openingByGameId[gameRow.external_game_id] != null) {
+                const openLine = openingByGameId[gameRow.external_game_id];
                 await supabase
                   .from('games')
                   .update({ opening_line: openLine })
