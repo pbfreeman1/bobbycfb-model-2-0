@@ -1,11 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState, useRef } from 'react';
-import { createPortal } from 'react-dom';
-
-const SUPABASE_URL = 'https://zpmdrazbqgzheqkvfltv.supabase.co';
-const SUPABASE_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpwbWRyYXpicWd6aGVxa3ZmbHR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgzMDY0MjksImV4cCI6MjEwMzg4MjQyOX0.NnVqnpyXRuu5zVpYa12NZ1jl24u2dPWL2vkiQKghuag';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { sbFetch, fmt, fmtKickoff, SUPABASE_URL, SUPABASE_ANON_KEY } from '../../../lib/supabase';
 
 const SB_HEADERS = {
   apikey: SUPABASE_ANON_KEY,
@@ -13,374 +9,153 @@ const SB_HEADERS = {
   'Content-Type': 'application/json',
 };
 
+const FH = { fontFamily: "'Space Grotesk', 'Segoe UI', sans-serif" };
+const FM = { fontFamily: "'IBM Plex Mono', 'Courier New', monospace" };
+const C = {
+  bg: '#0F1412', surface: '#161D1A', surface2: '#1B2320', border: '#2A332E',
+  text: '#EDEFE8', sub: '#8B9992', pss: '#D4A73C', agree: '#6FBF73', warn: '#C4573F', dim: '#5B655F',
+  mine: '#5B9BD4',
+};
+
+const PSS_BIN_ORDER = ['Elite', 'Very Strong', 'Strong', 'Moderate', 'No Play'];
+const DECISION_COLOR = { BET: C.agree, CONSIDER: C.pss, WATCH: C.sub, REVIEW: C.warn, PASS: C.dim };
+const PSS_BIN_COLOR = { Elite: C.agree, 'Very Strong': C.pss, Strong: '#C4933A', Moderate: '#8B7355', 'No Play': C.dim };
+const TIER_LABEL = { top3: 'Top-3', top5: 'Top-5', top7: 'Top-7' };
+
 // ---------------------------------------------------------------------------
-// Formatting helpers (same conventions as the original dashboard)
+// Line-sign helpers — stored lines are positive = home favored.
 // ---------------------------------------------------------------------------
-function fmt(n, digits = 1) {
-  if (n === null || n === undefined) return '—';
-  const num = typeof n === 'string' ? parseFloat(n) : n;
-  if (Number.isNaN(num)) return '—';
-  return num.toFixed(digits);
-}
-function fmtLine(n) {
-  if (n === null || n === undefined) return '—';
-  const num = typeof n === 'string' ? parseFloat(n) : n;
-  if (Number.isNaN(num)) return '—';
-  return num > 0 ? `+${num}` : `${num}`;
-}
-function fmtPct(frac, digits = 0) {
-  if (frac === null || frac === undefined) return '—';
-  return `${(parseFloat(frac) * 100).toFixed(digits)}%`;
-}
-function fmtKickoff(iso) {
-  if (!iso) return 'TBD';
-  const d = new Date(iso);
-  return (
-    d.toLocaleString('en-US', {
-      timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric',
-      hour: 'numeric', minute: '2-digit',
-    }) + ' ET'
-  );
-}
-function spreadForSide(vegasLine, side) {
-  if (vegasLine === null || vegasLine === undefined) return null;
-  const v = parseFloat(vegasLine);
+function spreadForSide(line, side) {
+  if (line === null || line === undefined) return null;
+  const v = parseFloat(line);
   if (Number.isNaN(v)) return null;
   return side === 'home' ? -v : v;
 }
-function favoredDisplay(line, homeTeam, awayTeam) {
-  if (line === null || line === undefined) return '—';
+function favorite(line) {
+  if (line === null || line === undefined) return null;
   const v = parseFloat(line);
-  if (Number.isNaN(v)) return '—';
-  if (v === 0) return "Pick'em";
-  return v > 0 ? `${homeTeam} -${v}` : `${awayTeam} -${Math.abs(v)}`;
+  if (Number.isNaN(v) || v === 0) return null;
+  return v > 0 ? { side: 'home', amt: v } : { side: 'away', amt: Math.abs(v) };
 }
-// Model's pick, properly signed for display — mirrors the original dashboard's
-// consensusPick(): uses consensus_spread (not the raw suggested_line column)
-// and applies spreadForSide so the number actually matches the side named.
-function modelPick(r) {
-  if (r.consensus_spread == null || r.suggested_side == null) return null;
-  const team = r.suggested_side === 'home' ? r.home_team : r.away_team;
-  const num = spreadForSide(r.consensus_spread, r.suggested_side);
-  return { team, num, side: r.suggested_side };
+function favored(team, num) {
+  if (num === null || num === undefined || Number.isNaN(num)) return `${team} —`;
+  const n = Number(num);
+  if (Number.isNaN(n)) return `${team} —`;
+  return `${team} ${n > 0 ? '+' : ''}${n.toFixed(1)}`;
 }
-
-function useOutsideClose(ref, onClose) {
-  useEffect(() => {
-    function handler(e) { if (ref.current && !ref.current.contains(e.target)) onClose(); }
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [ref, onClose]);
+function pssPick(pm, homeTeam, awayTeam) {
+  if (pm?.consensus_spread == null || pm?.suggested_side == null) return null;
+  const side = pm.suggested_side;
+  const team = side === 'home' ? homeTeam : awayTeam;
+  return { side, team, num: spreadForSide(pm.consensus_spread, side) };
+}
+function researchSideLabel(r, home, away) {
+  if (r.pick_side === 'home') return home;
+  if (r.pick_side === 'away') return away;
+  if (r.pick_side === 'over') return 'Over';
+  if (r.pick_side === 'under') return 'Under';
+  return r.pick_side;
+}
+function playLabel(pick, home, away) {
+  const type = pick.pick_type;
+  const line = pick.line_played;
+  if (type === 'total') {
+    const label = pick.side === 'over' ? 'Over' : 'Under';
+    return line == null ? label : `${label} ${Number(line).toFixed(1)}`;
+  }
+  const team = pick.side === 'home' ? home : away;
+  const n = spreadForSide(line, pick.side);
+  if (n === null) return `${team} ATS`;
+  return `${team} ${n > 0 ? '+' : ''}${n.toFixed(1)}`;
 }
 
 // ---------------------------------------------------------------------------
-// PSS visual scales
+// Small shared bits
 // ---------------------------------------------------------------------------
-const PSS_BIN_ORDER = ['Elite', 'Very Strong', 'Strong', 'Moderate', 'No Play'];
-const PSS_BIN_COLOR = {
-  'Elite': { fg: '#c4b5fd', bg: 'rgba(167,139,250,.20)' },
-  'Very Strong': { fg: '#38bd94', bg: 'rgba(56,189,148,.20)' },
-  'Strong': { fg: '#38bd94', bg: 'rgba(56,189,148,.10)' },
-  'Moderate': { fg: '#facc15', bg: 'rgba(250,204,21,.15)' },
-  'No Play': { fg: '#6b7280', bg: 'rgba(107,114,128,.12)' },
-};
-const DECISION_ORDER = ['BET', 'CONSIDER', 'WATCH', 'REVIEW', 'PASS'];
-const DECISION_COLOR = {
-  BET: { fg: '#38bd94', bg: 'rgba(56,189,148,.20)' },
-  CONSIDER: { fg: '#2dd4bf', bg: 'rgba(45,212,191,.16)' },
-  WATCH: { fg: '#facc15', bg: 'rgba(250,204,21,.15)' },
-  REVIEW: { fg: '#fb923c', bg: 'rgba(251,146,60,.18)' },
-  PASS: { fg: '#6b7280', bg: 'rgba(107,114,128,.12)' },
-};
-const TIER_LABEL = { top3: 'Top 3', top5: 'Top 5', top7: 'Top 7' };
-const SIGNAL_ICON = { Conviction: '🎯', Confirmation: '🔁', Consensus: '🌐' };
-
-function Badge({ text, colors, title }) {
-  if (!text) return <span style={{ color: '#5b6272' }}>—</span>;
+function Stat({ label, value, color, size = 13 }) {
   return (
-    <span
-      title={title}
-      style={{
-        display: 'inline-block', padding: '3px 9px', borderRadius: 20, fontSize: 11, fontWeight: 700,
-        color: colors?.fg || '#b8bfcc', background: colors?.bg || '#232838', whiteSpace: 'nowrap',
-      }}
-    >
-      {text}
-    </span>
+    <div>
+      <div style={{ ...FH, fontSize: 10, color: C.sub, marginBottom: 2, letterSpacing: 0.2 }}>{label}</div>
+      <div style={{ ...FM, fontSize: size, color: color || C.text }}>{value}</div>
+    </div>
+  );
+}
+function Badge({ children, color, filled }) {
+  return (
+    <span style={{
+      ...FM, fontSize: 10.5, padding: '2px 7px', borderRadius: 3, whiteSpace: 'nowrap',
+      border: `1px solid ${color}`, color: filled ? '#0F1412' : color,
+      background: filled ? color : 'transparent', letterSpacing: 0.3,
+    }}>{children}</span>
+  );
+}
+function TeamMark({ logoUrl, name }) {
+  if (logoUrl) return <img src={logoUrl} alt={name} style={{ width: 22, height: 22, objectFit: 'contain', flexShrink: 0 }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />;
+  return (
+    <div style={{ width: 22, height: 22, borderRadius: '50%', background: C.surface2, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, ...FM, color: C.sub, flexShrink: 0 }}>
+      {name.slice(0, 3).toUpperCase()}
+    </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Info / hint icon (desktop uses portal tooltip, mobile uses inline tooltip)
+// Modal shell
 // ---------------------------------------------------------------------------
-function InfoIcon({ text }) {
-  const [pos, setPos] = useState(null);
-  const ref = useRef(null);
-  function show() {
-    const rect = ref.current.getBoundingClientRect();
-    let x = rect.left + rect.width / 2;
-    x = Math.max(120, Math.min(x, (typeof window !== 'undefined' ? window.innerWidth : 800) - 120));
-    setPos({ x, y: rect.bottom + 8 });
-  }
-  function hide() { setPos(null); }
+function Modal({ title, onClose, children, wide }) {
   return (
-    <span
-      ref={ref}
-      onMouseEnter={show}
-      onMouseLeave={hide}
-      onClick={(e) => { e.stopPropagation(); pos ? hide() : show(); }}
-      style={{
-        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 14, height: 14,
-        borderRadius: '50%', background: '#232838', color: '#8a92a3', fontSize: 9, fontStyle: 'italic',
-        fontWeight: 700, cursor: 'help', marginLeft: 4, flexShrink: 0,
-      }}
-    >
-      i
-      {pos && typeof document !== 'undefined' && createPortal(
-        <div style={{
-          position: 'fixed', left: pos.x, top: pos.y, transform: 'translateX(-50%)', width: 230,
-          background: '#1a1e2b', border: '1px solid #2a3042', color: '#d3d8e2', fontSize: 11,
-          fontWeight: 400, lineHeight: 1.55, padding: '9px 11px', borderRadius: 8,
-          boxShadow: '0 4px 20px rgba(0,0,0,.5)', zIndex: 999, whiteSpace: 'normal',
-        }}>
-          {text}
-        </div>,
-        document.body
-      )}
-    </span>
-  );
-}
-
-function MobInfoIcon({ text }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <span style={{ position: 'relative', display: 'inline-flex', verticalAlign: 'middle', marginLeft: 3 }}>
-      <span
-        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 13, height: 13, borderRadius: '50%', background: '#2a3042', color: '#8a92a3', fontSize: 8, fontStyle: 'italic', fontWeight: 700, cursor: 'help', flexShrink: 0 }}
-        onMouseEnter={() => setOpen(true)}
-        onMouseLeave={() => setOpen(false)}
-        onTouchStart={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
-      >i</span>
-      {open && (
-        <span style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)', width: 200, background: '#1a1e2b', border: '1px solid #2a3042', color: '#d3d8e2', fontSize: 11, lineHeight: 1.5, padding: '8px 10px', borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,.5)', zIndex: 50, whiteSpace: 'normal', pointerEvents: 'none' }}>
-          {text}
-        </span>
-      )}
-    </span>
-  );
-}
-
-function TeamLogo({ src, alt }) {
-  if (!src) return null;
-  return <img src={src} alt={alt} style={{ width: 20, height: 20, objectFit: 'contain', flexShrink: 0 }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />;
-}
-
-const TOOLTIPS = {
-  rank: 'Games ranked 1–N by Play Strength Score (PSS) descending — the primary ranking metric for BobbyPSSModel.',
-  matchup: 'Away team @ home team.',
-  market_spread: 'Current actionable market spread.',
-  model_pick: "The side the PSS ensemble favors, and the model's implied fair spread for that side.",
-  edge: 'Model Spread vs current market line — the magnitude of pricing disagreement driving the play.',
-  pss: 'Play Strength Score (0–100): 30% Edge + 25% MSS + 20% Agreement + 15% Dispersion Quality + 10% Historical Confidence. The primary ranking metric.',
-  topk: 'How the play qualified. Top 3 = Conviction (concentrated strength), Top 5 = Confirmation (survives a broader committee), Top 7 = Consensus (broad agreement required).',
-  mss: 'Model Signal Strength Score (0–100, normalized) — composite quality of the underlying signal for the selected model pool.',
-  agreement: 'Share of the selected K models favoring the same side as the edge.',
-  stddev: 'Standard deviation of predicted spreads across the selected models. Lower means tighter consensus.',
-  historical: 'Calibration/performance tier for the selected models (from backtested + in-season ATS performance), one of the five PSS components.',
-  line_move: 'Opening line → current line movement, in points.',
-  market_alignment: "Whether the market is moving toward the model's fair line, staying stable, or moving against it.",
-  decision: 'Model-assisted action layer: BET (PSS ≥82, no material warning), CONSIDER (74–81.9), WATCH (66–73.9), REVIEW (strong score with a material conflict), PASS (<66 or a hard veto).',
-  drivers: 'Short auto-generated reasons for the PSS score — the strongest positive factors.',
-  warnings: 'Reasons to investigate before acting — dispersion, minority opposition, edge erosion, or adverse market movement.',
-  lean: 'A quick, informal flag for games you’re leaning toward but haven’t committed to.',
-  play: 'Your official PSS play for this game — the side, bet type, and unit size you’re tracking.',
-  notes: 'Your private notes on this game.',
-};
-
-// ---------------------------------------------------------------------------
-// Pick / Note modals (write to pss_user_picks — fully independent of the
-// original model's user_picks table)
-// ---------------------------------------------------------------------------
-function PickModal({ game, existing, defaultStatus, onClose, onSaved, onDeleted }) {
-  const ref = useRef(null);
-  useOutsideClose(ref, onClose);
-  const [pickType, setPickType] = useState(existing?.pick_type || 'spread');
-  const [side, setSide] = useState(existing?.side || null);
-  const [units, setUnits] = useState(existing?.units || 1);
-  const [status, setStatus] = useState(existing?.status || defaultStatus || 'official');
-  const [saving, setSaving] = useState(false);
-
-  const homeLine = game.vegas_line;
-  const homeDisplay = spreadForSide(homeLine, 'home');
-  const awayDisplay = spreadForSide(homeLine, 'away');
-
-  async function handleSave() {
-    if (!side) return;
-    setSaving(true);
-    const linePlayed = pickType === 'total' ? game.over_under : (homeLine != null ? parseFloat(homeLine) : null);
-    const body = {
-      game_id: game.id,
-      pss_game_metrics_id: game.pss_id || null,
-      played: true,
-      pick_type: pickType,
-      side,
-      line_played: linePlayed,
-      units,
-      status,
-      season: game.season,
-      week: game.week,
-    };
-    if (existing?.id) {
-      await fetch(`${SUPABASE_URL}/rest/v1/pss_user_picks?id=eq.${existing.id}`, {
-        method: 'PATCH', headers: { ...SB_HEADERS, Prefer: 'return=representation' }, body: JSON.stringify(body),
-      });
-    } else {
-      await fetch(`${SUPABASE_URL}/rest/v1/pss_user_picks`, {
-        method: 'POST', headers: { ...SB_HEADERS, Prefer: 'return=representation' }, body: JSON.stringify(body),
-      });
-    }
-    setSaving(false);
-    onSaved();
-  }
-  async function handleDelete() {
-    setSaving(true);
-    if (existing?.id) {
-      await fetch(`${SUPABASE_URL}/rest/v1/pss_user_picks?id=eq.${existing.id}`, { method: 'DELETE', headers: SB_HEADERS });
-    }
-    setSaving(false);
-    onDeleted();
-  }
-
-  return createPortal(
-    <div className="pss-overlay">
-      <div className="pss-modal" ref={ref}>
-        <h3>{game.away_team} @ {game.home_team}</h3>
-        <div className="pss-seg">
-          <button className={pickType === 'spread' ? 'on' : ''} onClick={() => { setPickType('spread'); setSide(null); }}>Spread</button>
-          <button className={pickType === 'total' ? 'on' : ''} onClick={() => { setPickType('total'); setSide(null); }}>Total</button>
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 200,
+      display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '5vh 16px', overflowY: 'auto',
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
+        width: '100%', maxWidth: wide ? 720 : 420, padding: 22,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ ...FH, fontSize: 15, color: C.text }}>{title}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.sub, cursor: 'pointer', fontSize: 16 }}>✕</button>
         </div>
-        {pickType === 'spread' ? (
-          <div className="pss-sidepick">
-            <button className={side === 'away' ? 'on' : ''} onClick={() => setSide('away')}>{game.away_team}<span>{fmtLine(awayDisplay)}</span></button>
-            <button className={side === 'home' ? 'on' : ''} onClick={() => setSide('home')}>{game.home_team}<span>{fmtLine(homeDisplay)}</span></button>
-          </div>
-        ) : (
-          <div className="pss-sidepick">
-            <button className={side === 'over' ? 'on' : ''} onClick={() => setSide('over')}>Over<span>{game.over_under ?? '—'}</span></button>
-            <button className={side === 'under' ? 'on' : ''} onClick={() => setSide('under')}>Under<span>{game.over_under ?? '—'}</span></button>
-          </div>
-        )}
-        <div className="pss-row">
-          <label>Units</label>
-          <div className="pss-units">{[1, 2, 3, 4, 5].map((u) => (<button key={u} className={units === u ? 'on' : ''} onClick={() => setUnits(u)}>{u}</button>))}</div>
-        </div>
-        <div className="pss-row">
-          <label>Status</label>
-          <div className="pss-seg small">
-            <button className={status === 'lean' ? 'on' : ''} onClick={() => setStatus('lean')}>Lean</button>
-            <button className={status === 'official' ? 'on' : ''} onClick={() => setStatus('official')}>Official</button>
-          </div>
-        </div>
-        <div className="pss-actions">
-          {existing && <button className="danger" onClick={handleDelete} disabled={saving}>Remove</button>}
-          <button className="ghost" onClick={onClose} disabled={saving}>Cancel</button>
-          <button className="primary" onClick={handleSave} disabled={saving || !side}>{saving ? 'Saving…' : 'Save'}</button>
-        </div>
+        {children}
       </div>
-    </div>,
-    document.body
-  );
-}
-
-function NoteModal({ game, existing, onClose, onSaved }) {
-  const ref = useRef(null);
-  useOutsideClose(ref, onClose);
-  const [text, setText] = useState(existing?.note || '');
-  const [saving, setSaving] = useState(false);
-  async function handleSave() {
-    setSaving(true);
-    if (existing?.id) {
-      await fetch(`${SUPABASE_URL}/rest/v1/pss_user_picks?id=eq.${existing.id}`, {
-        method: 'PATCH', headers: { ...SB_HEADERS, Prefer: 'return=representation' }, body: JSON.stringify({ note: text }),
-      });
-    } else {
-      await fetch(`${SUPABASE_URL}/rest/v1/pss_user_picks`, {
-        method: 'POST', headers: { ...SB_HEADERS, Prefer: 'return=representation' },
-        body: JSON.stringify({ game_id: game.id, pss_game_metrics_id: game.pss_id || null, note: text, season: game.season, week: game.week }),
-      });
-    }
-    setSaving(false);
-    onSaved(text);
-  }
-  return createPortal(
-    <div className="pss-overlay">
-      <div className="pss-modal" ref={ref}>
-        <h3>Notes — {game.away_team} @ {game.home_team}</h3>
-        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} placeholder="Injuries, weather, matchup notes…" />
-        <div className="pss-actions">
-          <button className="ghost" onClick={onClose} disabled={saving}>Cancel</button>
-          <button className="primary" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
-        </div>
-      </div>
-    </div>,
-    document.body
+    </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Detail panel — Recommendation header, PSS breakdown, model predictions,
-// market context, historical profile (spec section 10)
+// Per-model prediction breakdown — real PSS component weights/scores come
+// straight off pss_game_metrics (lib/pss-engine.js's W_EDGE/W_MSS/etc.),
+// never hardcoded here. Model list is the full selected_model_ids pool.
 // ---------------------------------------------------------------------------
-function DetailPanel({ game, logos, onClose }) {
-  const ref = useRef(null);
-  useOutsideClose(ref, onClose);
+function ModelBreakdownTable({ row }) {
+  const { game, pm } = row;
+  const home = game.home_team, away = game.away_team;
+  const vegasLine = (() => {
+    const raw = pm?.vegas_line ?? game.current_line ?? null;
+    if (raw === null || raw === undefined) return null;
+    const v = parseFloat(raw);
+    return Number.isNaN(v) ? null : v;
+  })();
+  const topkIds = pm?.selected_model_ids || [];
+
   const [models, setModels] = useState(null);
-  const [hist, setHist] = useState(null);
 
   useEffect(() => {
+    if (!topkIds.length) { setModels([]); return; }
     let cancelled = false;
-    async function load() {
-      setModels(null);
-      setHist(null);
-      const ids = (game.selected_model_ids || []).join(',');
-      if (ids) {
-        const res = await fetch(
-          `${SUPABASE_URL}/rest/v1/raw_predictions?select=model_id,predicted_margin,source_models(system_name)&game_id=eq.${game.id}&model_id=in.(${ids})`,
-          { headers: SB_HEADERS }
-        );
-        const data = res.ok ? await res.json() : [];
-        if (!cancelled) setModels(data);
-      }
-      // Historical profile: record for games with the same PSS bin, this season
-      if (game.season && game.pss_bin) {
-        const idsRes = await fetch(
-          `${SUPABASE_URL}/rest/v1/pss_game_metrics?select=id&season=eq.${game.season}&pss_bin=eq.${encodeURIComponent(game.pss_bin)}`,
-          { headers: SB_HEADERS }
-        );
-        const idRows = idsRes.ok ? await idsRes.json() : [];
-        const metricIds = idRows.map((r) => r.id).join(',');
-        if (metricIds) {
-          const gradesRes = await fetch(
-            `${SUPABASE_URL}/rest/v1/pss_pick_grades?select=ats_result&pss_game_metrics_id=in.(${metricIds})`,
-            { headers: SB_HEADERS }
-          );
-          const grades = gradesRes.ok ? await gradesRes.json() : [];
-          const w = grades.filter((g) => g.ats_result === 'win').length;
-          const l = grades.filter((g) => g.ats_result === 'loss').length;
-          const p = grades.filter((g) => g.ats_result === 'push').length;
-          if (!cancelled) setHist({ w, l, p, n: grades.length });
-        } else if (!cancelled) setHist({ w: 0, l: 0, p: 0, n: 0 });
-      }
-    }
-    load();
+    const idList = topkIds.join(',');
+    fetch(
+      `${SUPABASE_URL}/rest/v1/raw_predictions?select=model_id,predicted_margin,source_models(system_name)&game_id=eq.${game.id}&model_id=in.(${idList})`,
+      { headers: SB_HEADERS }
+    )
+      .then((r) => r.json())
+      .then((data) => { if (!cancelled) setModels(data); })
+      .catch(() => { if (!cancelled) setModels([]); });
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.id]);
 
-  const binColor = PSS_BIN_COLOR[game.pss_bin] || {};
-  const decColor = DECISION_COLOR[game.decision] || {};
-
   const modelStats = useMemo(() => {
-    if (!models || models.length === 0) return null;
+    if (!models || !models.length) return null;
     const vals = models.map((m) => parseFloat(m.predicted_margin)).filter((v) => !Number.isNaN(v));
     if (!vals.length) return null;
     const sorted = [...vals].sort((a, b) => a - b);
@@ -388,276 +163,815 @@ function DetailPanel({ game, logos, onClose }) {
     const mid = Math.floor(sorted.length / 2);
     const median = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
     const variance = vals.reduce((a, v) => a + Math.pow(v - mean, 2), 0) / vals.length;
-    return { mean, median, std: Math.sqrt(variance), min: sorted[0], max: sorted[sorted.length - 1] };
+    return { mean, median, std: Math.sqrt(variance), range: sorted[sorted.length - 1] - sorted[0] };
   }, [models]);
 
-  const components = [
-    { label: 'Edge', actual: `${fmtLine(fmt(game.edge, 1))}`, score: game.edge_score, weight: 30 },
-    { label: 'MSS', actual: fmt(game.raw_mss, 1), score: game.mss_score, weight: 25 },
-    { label: 'Agreement', actual: `${game.agreement_count}/${game.agreement_k}`, score: game.agreement_score, weight: 20 },
-    { label: 'STD', actual: fmt(game.stddev, 2), score: game.stddev_score, weight: 15 },
-    { label: 'Historical', actual: game.historical_tier, score: game.historical_score, weight: 10 },
-  ];
-  const totalContribution = components.reduce((a, c) => a + (c.score * c.weight) / 100, 0);
+  // Weights mirror lib/pss-engine.js: W_EDGE=0.30, W_MSS=0.25, W_AGREE=0.20, W_STD=0.15, W_HIST=0.10
+  const pssComponents = pm ? [
+    { label: 'Edge',       actual: pm.edge != null ? (pm.edge > 0 ? `+${Number(pm.edge).toFixed(1)}` : Number(pm.edge).toFixed(1)) : '—', score: pm.edge_score,      weight: 30 },
+    { label: 'MSS',        actual: pm.raw_mss != null ? Number(pm.raw_mss).toFixed(2) : '—',                                score: pm.mss_score,       weight: 25 },
+    { label: 'Agreement',  actual: pm.agreement_count != null ? `${pm.agreement_count}/${pm.agreement_k}` : (pm.agreement != null ? `${Math.round(pm.agreement * 100)}%` : '—'), score: pm.agreement_score, weight: 20 },
+    { label: 'STD',        actual: pm.stddev != null ? Number(pm.stddev).toFixed(2) : '—',                                  score: pm.stddev_score,    weight: 15 },
+    { label: 'Historical', actual: pm.historical_tier || '—',                                                               score: pm.historical_score, weight: 10 },
+  ] : null;
+  const pssTotal = pssComponents ? pssComponents.reduce((a, c) => a + ((c.score || 0) * c.weight) / 100, 0) : null;
 
-  const explanation = game.qualifies
-    ? `${TIER_LABEL[game.qualifying_tier] || 'Broad'} qualification (${game.signal_type}) supported by ${game.pss_bin.toLowerCase()} overall signal strength${game.warnings?.length ? ', though some warnings are worth reviewing below' : ''}.`
-    : `Did not clear the ${TIER_LABEL[game.qualifying_tier] || 'Top 7'} qualification bar this week — shown for reference at ${fmt(game.pss, 1)} PSS.`;
+  const thStyle = { ...FM, fontSize: 10, color: C.sub, padding: '6px 10px', background: C.surface2, letterSpacing: 0.3, textAlign: 'left', borderBottom: `1px solid ${C.border}` };
+  const tdStyle = { ...FM, fontSize: 11.5, padding: '7px 10px', borderBottom: `1px solid ${C.border}` };
 
-  return createPortal(
-    <div className="pss-overlay" style={{ alignItems: 'flex-start', paddingTop: '4vh' }}>
-      <div className="pss-detail" ref={ref}>
-        <button className="pss-detail-close" onClick={onClose}>✕</button>
-
-        {/* A. Recommendation header */}
-        <div className="pss-detail-header">
-          <div className="pss-detail-matchup">{game.away_team} @ {game.home_team}</div>
-          <div className="pss-detail-badges">
-            <Badge text={game.pss_bin} colors={binColor} />
-            <Badge text={`${TIER_LABEL[game.qualifying_tier] || TIER_LABEL[game.attempted_tier] || '—'} · ${game.signal_type || 'No Play'}`} colors={{ fg: '#8a92a3', bg: '#1a1e2b' }} />
-            <Badge text={game.decision} colors={decColor} />
-          </div>
-          <div className="pss-detail-stats">
-            <div><span>PSS</span><b>{fmt(game.pss, 1)}</b></div>
-            <div>
-              <span>Model Pick</span>
-              <b style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                {(() => {
-                  const mp = modelPick(game);
-                  if (!mp) return '—';
-                  return <><TeamLogo src={logos?.[mp.team]} alt="" />{mp.team} {fmtLine(fmt(mp.num, 1))}</>;
-                })()}
-              </b>
-            </div>
-            <div><span>Current Line</span><b>{favoredDisplay(game.vegas_line, game.home_team, game.away_team)}</b></div>
-            <div><span>Edge</span><b>{fmtLine(fmt(game.edge, 1))}</b></div>
-          </div>
-          <p className="pss-detail-explain">{explanation}</p>
-        </div>
-
-        {/* B. PSS component breakdown */}
-        <div className="pss-detail-section">
-          <h4>PSS Component Breakdown</h4>
-          <table className="pss-mini-table">
-            <thead><tr><th>Component</th><th>Actual</th><th>Score</th><th>Weight</th><th>Contribution</th></tr></thead>
-            <tbody>
-              {components.map((c) => (
-                <tr key={c.label}>
-                  <td>{c.label}</td><td>{c.actual}</td><td>{fmt(c.score, 0)}</td><td>{c.weight}%</td><td>{fmt((c.score * c.weight) / 100, 1)}</td>
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {pssComponents && (
+        <div>
+          <div style={{ ...FH, fontSize: 11, color: C.sub, marginBottom: 8 }}>PSS COMPONENT BREAKDOWN</div>
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 4, overflow: 'hidden', overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>{['COMPONENT', 'ACTUAL', 'SCORE', 'WEIGHT', 'CONTRIBUTION'].map((h) => <th key={h} style={thStyle}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {pssComponents.map((c, i) => (
+                  <tr key={c.label} style={{ background: i % 2 === 0 ? 'transparent' : C.surface2 }}>
+                    <td style={{ ...tdStyle, color: C.text }}>{c.label}</td>
+                    <td style={{ ...tdStyle, color: C.sub }}>{c.actual}</td>
+                    <td style={{ ...tdStyle, color: C.text }}>{c.score != null ? Math.round(c.score) : '—'}</td>
+                    <td style={{ ...tdStyle, color: C.sub }}>{c.weight}%</td>
+                    <td style={{ ...tdStyle, color: C.pss }}>{c.score != null ? ((c.score * c.weight) / 100).toFixed(1) : '—'}</td>
+                  </tr>
+                ))}
+                <tr style={{ background: C.surface2 }}>
+                  <td colSpan={4} style={{ ...tdStyle, color: C.sub, fontWeight: 700 }}>TOTAL</td>
+                  <td style={{ ...tdStyle, color: C.pss, fontWeight: 700 }}>{pssTotal != null ? pssTotal.toFixed(1) : '—'}</td>
                 </tr>
-              ))}
-              <tr className="pss-mini-total"><td colSpan={4}>TOTAL</td><td>{fmt(totalContribution, 1)}</td></tr>
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+          </div>
         </div>
+      )}
 
-        {/* C. Individual model predictions */}
-        <div className="pss-detail-section">
-          <h4>Individual Model Predictions ({game.selected_model_ids?.length || 0})</h4>
-          {models === null ? (
-            <p className="pss-detail-empty">Loading…</p>
-          ) : models.length === 0 ? (
-            <p className="pss-detail-empty">No model-level predictions found.</p>
-          ) : (
-            <>
-              <table className="pss-mini-table">
-                <thead><tr><th>Model</th><th>Predicted Spread</th><th>Edge vs Market</th><th>Selected Side</th></tr></thead>
+      <div>
+        <div style={{ ...FH, fontSize: 11, color: C.sub, marginBottom: 8 }}>
+          INDIVIDUAL MODEL PREDICTIONS ({models === null ? '…' : models.length})
+        </div>
+        {models === null ? (
+          <div style={{ ...FM, fontSize: 11, color: C.dim }}>Loading…</div>
+        ) : models.length === 0 ? (
+          <div style={{ ...FM, fontSize: 11, color: C.dim }}>No model predictions found for this game.</div>
+        ) : (
+          <>
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: 4, overflow: 'hidden', overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>{['MODEL', 'PREDICTED SPREAD', 'EDGE VS MARKET', 'SELECTED SIDE'].map((h) => <th key={h} style={thStyle}>{h}</th>)}</tr>
+                </thead>
                 <tbody>
-                  {models.map((m) => {
+                  {models.map((m, i) => {
                     const pred = parseFloat(m.predicted_margin);
-                    const modelEdge = pred - parseFloat(game.vegas_line);
-                    const side = pred > parseFloat(game.vegas_line) ? game.home_team : pred < parseFloat(game.vegas_line) ? game.away_team : 'Even';
+                    const edge = vegasLine === null ? null : pred - vegasLine;
+                    const side = edge === null ? '—' : edge > 0 ? home : edge < 0 ? away : 'Even';
+                    const edgeColor = edge !== null && Math.abs(edge) >= 1.5 ? C.agree : C.sub;
                     return (
-                      <tr key={m.model_id}>
-                        <td>{m.source_models?.system_name || 'Unknown'}</td>
-                        <td>{fmtLine(fmt(pred, 1))}</td>
-                        <td>{fmtLine(fmt(modelEdge, 1))}</td>
-                        <td>{side}</td>
+                      <tr key={m.model_id} style={{ background: i % 2 === 0 ? 'transparent' : C.surface2 }}>
+                        <td style={{ ...tdStyle, color: C.text }}>{m.source_models?.system_name || 'Unknown'}</td>
+                        <td style={{ ...tdStyle, color: C.sub }}>{pred > 0 ? `+${pred.toFixed(1)}` : pred.toFixed(1)}</td>
+                        <td style={{ ...tdStyle, color: edgeColor }}>{edge === null ? '—' : edge > 0 ? `+${edge.toFixed(1)}` : edge.toFixed(1)}</td>
+                        <td style={{ ...tdStyle, color: edge !== null && edge > 0 ? C.agree : C.pss }}>{side}</td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
-              {modelStats && (
-                <div className="pss-model-stats">
-                  <span>Mean <b>{fmt(modelStats.mean, 2)}</b></span>
-                  <span>Median <b>{fmt(modelStats.median, 2)}</b></span>
-                  <span>STD <b>{fmt(modelStats.std, 2)}</b></span>
-                  <span>Range <b>{fmt(modelStats.max - modelStats.min, 2)}</b></span>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* D. Market context */}
-        <div className="pss-detail-section">
-          <h4>Market Context</h4>
-          <div className="pss-market-grid">
-            <div><span>Opening Line</span><b>{game.opening_line != null ? favoredDisplay(game.opening_line, game.home_team, game.away_team) : '—'}</b></div>
-            <div><span>Current Line</span><b>{favoredDisplay(game.current_line, game.home_team, game.away_team)}</b></div>
-            <div><span>Line Move</span><b>{game.line_move != null ? fmtLine(fmt(game.line_move, 1)) : '—'}</b></div>
-            <div><span>Edge at Open</span><b>{game.edge_at_open != null ? fmtLine(fmt(game.edge_at_open, 1)) : '—'}</b></div>
-            <div><span>Edge Retention</span><b>{game.edge_retention != null ? fmtPct(game.edge_retention) : '—'}</b></div>
-            <div><span>Market Alignment</span><b>{game.market_alignment || '—'}</b></div>
-            <div><span>Edge Cushion</span><b>{game.edge_cushion != null ? fmt(game.edge_cushion, 1) : '—'}</b></div>
-          </div>
-        </div>
-
-        {/* Drivers & Warnings */}
-        <div className="pss-detail-section">
-          <h4>PSS Drivers &amp; Warnings</h4>
-          <div className="pss-chip-row">
-            {(game.pss_drivers || []).map((d, i) => <span key={i} className="pss-chip pss-chip-pos">✓ {d}</span>)}
-            {(!game.pss_drivers || game.pss_drivers.length === 0) && <span className="pss-detail-empty">No standout positive drivers.</span>}
-          </div>
-          <div className="pss-chip-row" style={{ marginTop: 8 }}>
-            {(game.warnings || []).map((w, i) => <span key={i} className="pss-chip pss-chip-warn">⚠ {w}</span>)}
-            {(!game.warnings || game.warnings.length === 0) && <span className="pss-detail-empty">No warnings flagged.</span>}
-          </div>
-        </div>
-
-        {/* E. Historical profile */}
-        <div className="pss-detail-section">
-          <h4>Historical Profile — {game.pss_bin} plays, {game.season}</h4>
-          {hist === null ? (
-            <p className="pss-detail-empty">Loading…</p>
-          ) : hist.n === 0 ? (
-            <p className="pss-detail-empty">No graded {game.pss_bin} plays yet this season (N=0). This builds up as weeks are graded.</p>
-          ) : (
-            <p className="pss-detail-record">
-              {hist.w}-{hist.l}{hist.p ? `-${hist.p}` : ''} ATS ({((hist.w / Math.max(1, hist.w + hist.l)) * 100).toFixed(1)}%), N={hist.n}
-            </p>
-          )}
-        </div>
+            </div>
+            {modelStats && (
+              <div style={{ ...FM, fontSize: 11, color: C.sub, marginTop: 8, display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+                <span>Mean <b style={{ color: C.text }}>{modelStats.mean.toFixed(2)}</b></span>
+                <span>Median <b style={{ color: C.text }}>{modelStats.median.toFixed(2)}</b></span>
+                <span>STD <b style={{ color: C.text }}>{modelStats.std.toFixed(2)}</b></span>
+                <span>Range <b style={{ color: C.text }}>{modelStats.range.toFixed(2)}</b></span>
+              </div>
+            )}
+          </>
+        )}
       </div>
-    </div>,
-    document.body
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Main dashboard
-// ---------------------------------------------------------------------------
-const QUICK_FILTERS = ['All', 'Elite', 'Very Strong+', 'Top 3', 'Top 5', 'Top 7', 'Warnings', 'Model Picks Only'];
-
-function SeasonStatCard({ title, record, note, highlight }) {
-  const decided = record.w + record.l;
-  const p = decided > 0 ? record.w / decided : null;
-  return (
-    <div className="card" style={highlight ? { borderColor: 'rgba(196,181,253,.35)' } : {}}>
-      <div style={{ fontSize: 12, color: '#8a92a3', fontWeight: 700, marginBottom: 6 }}>{title}</div>
-      <div style={{ fontSize: 22, fontWeight: 800 }}>
-        <span style={{ color: '#38bd94' }}>{record.w}</span>
-        <span style={{ color: '#5b6272' }}>-</span>
-        <span style={{ color: '#f87171' }}>{record.l}</span>
-        {record.p > 0 && <span style={{ color: '#facc15' }}>-{record.p}</span>}
-        {decided > 0 && <span style={{ fontSize: 13, color: '#8a92a3', marginLeft: 8 }}>{(p * 100).toFixed(1)}%</span>}
-      </div>
-      <div style={{ fontSize: 11, color: '#5b6272', marginTop: 4 }}>{note}</div>
     </div>
   );
 }
 
-export default function PSSDashboard() {
+// ---------------------------------------------------------------------------
+// Legend modal
+// ---------------------------------------------------------------------------
+function LegendModal({ onClose }) {
+  const Section = ({ title, color, children }) => (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ ...FH, fontSize: 13, color, marginBottom: 8 }}>{title}</div>
+      <div style={{ ...FM, fontSize: 12, color: C.sub, lineHeight: 1.7 }}>{children}</div>
+    </div>
+  );
+  return (
+    <Modal title="How to read the board" onClose={onClose} wide>
+      <Section title="PSS (BobbyPSSModel)" color={C.pss}>
+        <p><b style={{ color: C.text }}>PSS score (0–100):</b> 30% Edge + 25% MSS + 20% Agreement + 15% Dispersion(StdDev) + 10% Historical Tier.</p>
+        <p><b style={{ color: C.text }}>Bins:</b> {PSS_BIN_ORDER.join(' → ')}, high to low.</p>
+        <p><b style={{ color: C.text }}>Top-K tier:</b> Top-3 = Conviction, Top-5 = Confirmation, Top-7 = Consensus.</p>
+        <p><b style={{ color: C.text }}>Decision:</b> BET (PSS ≥82) · CONSIDER (74–81.9) · WATCH (66–73.9) · PASS (&lt;66). A BET can downgrade to REVIEW if the market has moved against the model.</p>
+        <p><b style={{ color: C.text }}>Hard vetoes</b> force PASS regardless of score: StdDev &gt; 6, Agreement &lt; 70%, or |Edge| &lt; 2.</p>
+      </Section>
+      <Section title="Card cues" color={C.agree}>
+        <p><b style={{ color: C.text }}>Gold left border:</b> Elite bin + BET decision. <b style={{ color: C.text }}>Green left border:</b> BET decision only.</p>
+        <p>Cards are ranked #1…N by PSS score — the rank number stays attached to the game even if you change the sort order.</p>
+      </Section>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Season stats modal
+// ---------------------------------------------------------------------------
+function SeasonStatsModal({ season, week, onClose }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const pssMetrics = await sbFetch(`pss_game_metrics?select=id,pss_bin,qualifies,pss_pick_grades(ats_result)&season=eq.${season}&week=lte.${week}`);
+        const pssGraded = pssMetrics.map((m) => ({ ...m, pg: Array.isArray(m.pss_pick_grades) ? m.pss_pick_grades[0] : m.pss_pick_grades })).filter((m) => m.pg);
+        if (cancelled) return;
+        setData({
+          overall: tally(pssGraded.filter((m) => m.qualifies).map((m) => m.pg.ats_result)),
+          rows: bucketBy(pssGraded, (m) => m.pss_bin || 'No Play', PSS_BIN_ORDER),
+        });
+      } catch (e) {
+        if (!cancelled) setError(String(e.message || e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [season, week]);
+
+  return (
+    <Modal title="Season stats" onClose={onClose} wide>
+      {loading && <div style={{ ...FM, fontSize: 12, color: C.sub }}>Loading…</div>}
+      {error && <div style={{ ...FM, fontSize: 12, color: C.warn }}>{error}</div>}
+      {!loading && !error && data && (
+        <>
+          <div style={{ display: 'flex', gap: 28, marginBottom: 20 }}>
+            <Stat label="QUALIFIED PLAYS RECORD" value={recordStr(data.overall)} size={18} />
+            <Stat label="ATS %" value={pctStr(data.overall)} size={18} color={C.agree} />
+          </div>
+          <div style={{ ...FH, fontSize: 11, color: C.sub, marginBottom: 8 }}>BY BIN (all graded games, not just qualified)</div>
+          {data.rows.map((r) => (
+            <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${C.border}`, ...FM, fontSize: 12 }}>
+              <span style={{ color: C.text, width: 120 }}>{r.label}</span>
+              <span style={{ color: C.sub, width: 80 }}>{recordStr(r.record)}</span>
+              <span style={{ color: C.text }}>{pctStr(r.record)}</span>
+            </div>
+          ))}
+        </>
+      )}
+    </Modal>
+  );
+}
+function tally(results) {
+  return results.reduce((acc, r) => {
+    if (r === 'win') acc.wins++;
+    else if (r === 'loss') acc.losses++;
+    else if (r === 'push') acc.pushes++;
+    return acc;
+  }, { wins: 0, losses: 0, pushes: 0 });
+}
+function recordStr(record) {
+  return `${record.wins}-${record.losses}${record.pushes ? `-${record.pushes}` : ''}`;
+}
+function pctStr(record) {
+  const decided = record.wins + record.losses;
+  if (decided === 0) return '—';
+  return `${((record.wins / decided) * 100).toFixed(1)}%`;
+}
+// Standard -110 vig: a win nets units/1.1, a loss costs the full unit stake, a push is flat.
+function netUnitsFor(gradedPicks) {
+  return gradedPicks.reduce((sum, p) => {
+    const u = parseFloat(p.units) || 0;
+    if (p.result === 'win') return sum + u / 1.1;
+    if (p.result === 'loss') return sum - u;
+    return sum;
+  }, 0);
+}
+function bucketBy(graded, keyFn, order) {
+  const map = new Map();
+  for (const m of graded) {
+    const k = keyFn(m);
+    const row = map.get(k) || { label: k, results: [] };
+    row.results.push(m.pg.ats_result);
+    map.set(k, row);
+  }
+  return Array.from(map.values()).map((r) => ({ label: r.label, record: tally(r.results) })).sort((a, b) => order.indexOf(a.label) - order.indexOf(b.label));
+}
+
+// ---------------------------------------------------------------------------
+// My Card modal
+// ---------------------------------------------------------------------------
+function MyCardModal({ rows, picksByGame, season, onClose }) {
+  const [tab, setTab] = useState('week');
+  const entries = rows.map((r) => {
+    const plays = picksByGame[r.game.id] || [];
+    return { r, plays };
+  }).filter((e) => e.plays.length > 0);
+
+  const totalUnits = entries.flatMap((e) => e.plays).reduce((sum, p) => sum + (parseFloat(p.units) || 0), 0);
+
+  return (
+    <Modal title="My card" onClose={onClose} wide>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: `1px solid ${C.border}` }}>
+        {[['week', 'This week'], ['results', "Bobby's Pick Results"]].map(([t, label]) => (
+          <button key={t} onClick={() => setTab(t)} style={{
+            ...FM, fontSize: 12, background: 'none', border: 'none', cursor: 'pointer',
+            color: tab === t ? C.pss : C.sub, borderBottom: `2px solid ${tab === t ? C.pss : 'transparent'}`,
+            padding: '8px 14px', fontWeight: tab === t ? 700 : 400,
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {tab === 'week' && (
+        <>
+          <div style={{ ...FM, fontSize: 12, color: C.sub, marginBottom: 16 }}>
+            {entries.length} games · {entries.reduce((n, e) => n + e.plays.length, 0)} plays · {totalUnits.toFixed(1)}u total exposure
+          </div>
+          {entries.length === 0 && <div style={{ ...FM, fontSize: 12, color: C.sub }}>No plays logged yet — use "+ Add Pick" on any game card.</div>}
+          {entries.map(({ r, plays }) => {
+            const home = r.game.home_team, away = r.game.away_team;
+            return (
+              <div key={r.game.id} style={{ padding: '10px 0', borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                  <div style={{ ...FH, fontSize: 13, color: C.text }}>{away} @ {home}</div>
+                  <span style={{ ...FM, fontSize: 11, color: C.sub }}>{fmtKickoff(r.game.kickoff_at)}</span>
+                  {r.game.tv_network && <span style={{ ...FM, fontSize: 11, color: C.sub }}>{r.game.tv_network}</span>}
+                </div>
+                {plays.map((pk) => (
+                  <div key={pk.id} style={{
+                    ...FM, fontSize: 12, color: C.sub, display: 'flex', gap: 10, alignItems: 'center', padding: '2px 6px',
+                    ...(pk.is_lock ? { background: 'rgba(212,167,60,0.12)', border: '1px solid rgba(212,167,60,0.35)', borderRadius: 4 } : {}),
+                  }}>
+                    {pk.is_lock && <span style={{ fontSize: 11 }}>🔒</span>}
+                    <span style={{ color: C.agree }}>{(parseFloat(pk.units) || 1).toFixed(pk.units % 1 === 0 ? 0 : 1)}u</span>
+                    <span style={{ color: pk.is_lock ? C.pss : C.text, fontWeight: pk.is_lock ? 700 : 400 }}>{playLabel(pk, home, away)}</span>
+                    {pk.note && <span style={{ fontSize: 10.5, color: C.dim }}>· {pk.note}</span>}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {tab === 'results' && <PickResultsTab season={season} />}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Bobby's Pick Results — season record, net units, week-by-week breakdown.
+// Net units assumes standard -110 vig on every pick (win=+units/1.1,
+// loss=-units, push=0) since user_picks has no stored odds/price field.
+// ---------------------------------------------------------------------------
+function PickResultsTab({ season }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [picks, setPicks] = useState([]);
+  const [expandedWeeks, setExpandedWeeks] = useState(new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const rows = await sbFetch(`user_picks?select=*,games(home_team,away_team)&season=eq.${season}&pick_type=neq.note&status=neq.lean&order=week.desc,created_at.asc`);
+        if (!cancelled) setPicks(rows);
+      } catch (e) {
+        if (!cancelled) setError(String(e.message || e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [season]);
+
+  const graded = picks.filter((p) => p.result === 'win' || p.result === 'loss' || p.result === 'push');
+  const record = tally(graded.map((p) => p.result));
+  const netUnits = netUnitsFor(graded);
+
+  const byWeek = useMemo(() => {
+    const map = new Map();
+    for (const p of picks) {
+      if (!map.has(p.week)) map.set(p.week, []);
+      map.get(p.week).push(p);
+    }
+    return Array.from(map.entries()).sort((a, b) => b[0] - a[0]);
+  }, [picks]);
+
+  function toggleWeek(w) {
+    setExpandedWeeks((prev) => { const n = new Set(prev); n.has(w) ? n.delete(w) : n.add(w); return n; });
+  }
+
+  if (loading) return <div style={{ ...FM, fontSize: 12, color: C.sub }}>Loading…</div>;
+  if (error) return <div style={{ ...FM, fontSize: 12, color: C.warn }}>{error}</div>;
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 28, marginBottom: 20 }}>
+        <Stat label="SEASON RECORD" value={recordStr(record)} size={18} />
+        <Stat label="ATS %" value={pctStr(record)} size={18} color={C.agree} />
+        <Stat label="NET UNITS" value={`${netUnits >= 0 ? '+' : ''}${netUnits.toFixed(2)}u`} size={18} color={netUnits >= 0 ? C.agree : C.warn} />
+      </div>
+      {byWeek.length === 0 && <div style={{ ...FM, fontSize: 12, color: C.sub }}>No picks logged this season yet.</div>}
+      {byWeek.map(([w, weekPicks]) => {
+        const weekGraded = weekPicks.filter((p) => p.result === 'win' || p.result === 'loss' || p.result === 'push');
+        const weekRecord = tally(weekGraded.map((p) => p.result));
+        const weekNetUnits = netUnitsFor(weekGraded);
+        const expanded = expandedWeeks.has(w);
+        return (
+          <div key={w} style={{ borderBottom: `1px solid ${C.border}` }}>
+            <button onClick={() => toggleWeek(w)} style={{
+              width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              background: 'none', border: 'none', cursor: 'pointer', padding: '10px 0', color: C.text,
+            }}>
+              <span style={{ ...FH, fontSize: 13 }}>Week {w}</span>
+              <span style={{ ...FM, fontSize: 12, color: C.sub, display: 'flex', gap: 10, alignItems: 'center' }}>
+                {weekPicks.length} pick{weekPicks.length !== 1 ? 's' : ''} · {recordStr(weekRecord)} ·{' '}
+                <span style={{ color: weekNetUnits >= 0 ? C.agree : C.warn }}>{weekNetUnits >= 0 ? '+' : ''}{weekNetUnits.toFixed(2)}u</span>
+                <span style={{ display: 'inline-block', transition: 'transform 0.15s', transform: expanded ? 'rotate(180deg)' : 'none' }}>▼</span>
+              </span>
+            </button>
+            {expanded && (
+              <div style={{ paddingBottom: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {weekPicks.map((p) => {
+                  const g = p.games;
+                  const home = g?.home_team, away = g?.away_team;
+                  const resultColor = p.result === 'win' ? C.agree : p.result === 'loss' ? C.warn : p.result === 'push' ? C.pss : C.dim;
+                  return (
+                    <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', ...FM, fontSize: 12 }}>
+                      <span style={{ color: C.text }}>
+                        {p.is_custom
+                          ? p.custom_label
+                          : (home && away ? `${playLabel(p, home, away)} — ${away} @ ${home}` : playLabel(p, home || '', away || ''))}
+                      </span>
+                      <span style={{ color: resultColor, fontWeight: 700 }}>{p.result ? p.result.toUpperCase() : 'PENDING'}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Add / edit pick modal — writes to user_picks.
+// ---------------------------------------------------------------------------
+function PickModal({ game, existing, onClose, onSaved, onDeleted }) {
+  const [pickType, setPickType] = useState(existing?.pick_type || 'spread');
+  const [side, setSide] = useState(existing?.side || null);
+  const [line, setLine] = useState(existing?.line_played != null ? String(existing.line_played) : '');
+  const [units, setUnits] = useState(existing?.units || 1);
+  const [notes, setNotes] = useState(existing?.note || '');
+  const [saving, setSaving] = useState(false);
+
+  const vegasLine = game.current_line != null ? parseFloat(game.current_line) : null;
+  const homeSpread = vegasLine != null ? spreadForSide(vegasLine, 'home') : null;
+  const awaySpread = vegasLine != null ? spreadForSide(vegasLine, 'away') : null;
+
+  useEffect(() => {
+    if (existing) return;
+    if (pickType === 'total') { setLine(game.over_under != null ? String(game.over_under) : ''); return; }
+    if (side === 'home' && homeSpread != null) setLine(homeSpread.toFixed(1));
+    else if (side === 'away' && awaySpread != null) setLine(awaySpread.toFixed(1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [side, pickType]);
+
+  function fmtSpread(n) { if (n == null) return '—'; return n > 0 ? `+${n.toFixed(1)}` : n.toFixed(1); }
+
+  async function handleSave() {
+    if (!side) return;
+    setSaving(true);
+    try {
+      await onSaved({ pick_type: pickType, side, line_played: line.trim() === '' ? null : parseFloat(line), units, note: notes.trim() || null });
+    } finally { setSaving(false); }
+  }
+  async function handleDelete() {
+    setSaving(true);
+    try { await onDeleted(); } finally { setSaving(false); }
+  }
+
+  const seg = (active) => ({
+    flex: 1, padding: '7px 0', borderRadius: 6, border: `1px solid ${active ? C.pss : C.border}`,
+    background: active ? `${C.pss}1F` : C.bg, color: active ? C.pss : C.sub, cursor: 'pointer', fontSize: 13, fontWeight: active ? 700 : 400,
+  });
+  const teamBtn = (active) => ({
+    flex: 1, padding: '12px 10px', borderRadius: 8, border: `1px solid ${active ? C.agree : C.border}`,
+    background: active ? `${C.agree}1F` : C.bg, color: active ? C.agree : C.text, cursor: 'pointer', textAlign: 'center', fontSize: 13, fontWeight: active ? 700 : 400,
+  });
+  const unitBtn = (active) => ({
+    width: 34, height: 34, borderRadius: 6, border: `1px solid ${active ? C.agree : C.border}`,
+    background: active ? C.agree : C.bg, color: active ? '#0F1412' : C.sub, cursor: 'pointer', fontSize: 13, fontWeight: active ? 700 : 400,
+  });
+  const inputStyle = { ...FM, fontSize: 13, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, padding: '8px 10px', color: C.text, width: '100%', boxSizing: 'border-box' };
+
+  return (
+    <Modal title={`${game.away_team} @ ${game.home_team}`} onClose={onClose}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+        <button style={seg(pickType === 'spread')} onClick={() => { setPickType('spread'); setSide(null); }}>Spread</button>
+        <button style={seg(pickType === 'total')} onClick={() => { setPickType('total'); setSide(null); }}>Total</button>
+      </div>
+
+      {pickType === 'spread' ? (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          <button style={teamBtn(side === 'away')} onClick={() => setSide('away')}>
+            <div style={{ fontSize: 12, color: C.sub, marginBottom: 3 }}>{game.away_team}</div>
+            <div style={{ fontSize: 17, fontWeight: 700 }}>{fmtSpread(awaySpread)}</div>
+          </button>
+          <button style={teamBtn(side === 'home')} onClick={() => setSide('home')}>
+            <div style={{ fontSize: 12, color: C.sub, marginBottom: 3 }}>{game.home_team}</div>
+            <div style={{ fontSize: 17, fontWeight: 700 }}>{fmtSpread(homeSpread)}</div>
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          <button style={teamBtn(side === 'over')} onClick={() => setSide('over')}>
+            <div style={{ fontSize: 12, color: C.sub, marginBottom: 3 }}>Over</div>
+            <div style={{ fontSize: 17, fontWeight: 700 }}>{game.over_under ?? '—'}</div>
+          </button>
+          <button style={teamBtn(side === 'under')} onClick={() => setSide('under')}>
+            <div style={{ fontSize: 12, color: C.sub, marginBottom: 3 }}>Under</div>
+            <div style={{ fontSize: 17, fontWeight: 700 }}>{game.over_under ?? '—'}</div>
+          </button>
+        </div>
+      )}
+
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: C.sub, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Line you got</div>
+        <input style={inputStyle} type="number" step="0.5" value={line} onChange={(e) => setLine(e.target.value)} placeholder="e.g. -3.5" />
+      </div>
+
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: C.sub, marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.5 }}>Units</div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {[1, 2, 3, 4, 5].map((u) => <button key={u} style={unitBtn(units === u)} onClick={() => setUnits(u)}>{u}</button>)}
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 11, color: C.sub, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Notes (optional)</div>
+        <textarea style={{ ...inputStyle, resize: 'vertical', minHeight: 56 }} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Injuries, weather, matchup notes…" />
+      </div>
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        {existing && <button onClick={handleDelete} disabled={saving} style={{ padding: '9px 14px', borderRadius: 8, border: `1px solid ${C.warn}`, background: 'transparent', color: C.warn, cursor: 'pointer', fontSize: 13 }}>Remove</button>}
+        <button onClick={onClose} style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+        <button onClick={handleSave} disabled={saving || !side} style={{ flex: 2, padding: '9px 0', borderRadius: 8, border: 'none', background: side ? C.agree : C.border, color: side ? '#0F1412' : C.dim, cursor: side && !saving ? 'pointer' : 'default', fontSize: 13, fontWeight: 700 }}>
+          {saving ? 'Saving…' : 'Save Pick'}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Research pick modal — same field set/write path as "Record a Pick from
+// Research" on /cfb/research (research_picks table), Game pre-filled to the
+// card's game.
+// ---------------------------------------------------------------------------
+function ResearchPickModal({ game, onClose, onSaved }) {
+  const [pickSide, setPickSide] = useState('home');
+  const [pickType, setPickType] = useState('spread');
+  const [source, setSource] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await onSaved({ pick_side: pickSide, pick_type: pickType, source_label: source.trim() || null, note: note.trim() || null });
+    } finally { setSaving(false); }
+  }
+
+  const selStyle = { ...FM, fontSize: 13, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, padding: '8px 10px', color: C.text, width: '100%', boxSizing: 'border-box' };
+
+  return (
+    <Modal title={`Research pick — ${game.away_team} @ ${game.home_team}`} onClose={onClose}>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: C.sub, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Side</div>
+        <select style={selStyle} value={pickSide} onChange={(e) => setPickSide(e.target.value)}>
+          <option value="home">{game.home_team} (Home)</option>
+          <option value="away">{game.away_team} (Away)</option>
+          <option value="over">Over{game.over_under != null ? ` ${game.over_under}` : ''}</option>
+          <option value="under">Under{game.over_under != null ? ` ${game.over_under}` : ''}</option>
+        </select>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: C.sub, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Type</div>
+        <select style={selStyle} value={pickType} onChange={(e) => setPickType(e.target.value)}>
+          <option value="spread">Spread (ATS)</option>
+          <option value="total">Total (O/U)</option>
+        </select>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: C.sub, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Source</div>
+        <input style={selStyle} placeholder="e.g. Action Network" value={source} onChange={(e) => setSource(e.target.value)} />
+      </div>
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 11, color: C.sub, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Note</div>
+        <input style={selStyle} placeholder="Optional" value={note} onChange={(e) => setNote(e.target.value)} />
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+        <button onClick={handleSave} disabled={saving} style={{ flex: 2, padding: '9px 0', borderRadius: 8, border: 'none', background: C.pss, color: '#0F1412', cursor: saving ? 'default' : 'pointer', fontSize: 13, fontWeight: 700 }}>
+          {saving ? 'Saving…' : 'Save Pick'}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Game card
+// ---------------------------------------------------------------------------
+function GameCard({ row, rank, expanded, onToggle, logos, plays, research, onOpenPickModal, onOpenResearchModal, onRemoveResearch }) {
+  const { game, pm } = row;
+  const home = game.home_team, away = game.away_team;
+  const pp = pssPick(pm, home, away);
+  const isElite = pm?.pss_bin === 'Elite';
+  const isBet = pm?.decision === 'BET';
+  const showBinBadge = pm?.pss_bin && pm.pss_bin !== 'No Play';
+  const showDecisionBadge = ['BET', 'CONSIDER', 'WATCH'].includes(pm?.decision);
+  const borderColor = isElite && isBet ? C.pss : isBet ? C.agree : C.border;
+  const fav = favorite(game.current_line);
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'stretch', gap: 8, marginBottom: 12 }}>
+      <div style={{ ...FM, fontSize: 12, color: C.dim, width: 26, flexShrink: 0, textAlign: 'right', paddingTop: 14 }}>
+        {rank ? `#${rank}` : '—'}
+      </div>
+      <div style={{
+        flex: 1, minWidth: 0, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6,
+        borderLeft: `4px solid ${borderColor}`, overflow: 'hidden', display: 'flex', flexDirection: 'column',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'stretch' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {/* Row 1 — matchup */}
+            <div style={{ padding: '14px 16px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
+                <TeamMark logoUrl={logos[away]} name={away} />
+                <span style={{ ...FH, fontSize: 14.5, color: C.text }}>
+                  {away}{fav?.side === 'away' && <span style={{ color: C.sub, fontWeight: 400 }}> (-{fav.amt.toFixed(1)})</span>}
+                </span>
+                <span style={{ color: C.dim, fontSize: 12 }}>@</span>
+                <TeamMark logoUrl={logos[home]} name={home} />
+                <span style={{ ...FH, fontSize: 14.5, color: C.text }}>
+                  {home}{fav?.side === 'home' && <span style={{ color: C.sub, fontWeight: 400 }}> (-{fav.amt.toFixed(1)})</span>}
+                </span>
+              </div>
+              <div style={{ ...FM, fontSize: 11, color: C.sub, textAlign: 'right', display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                <span>{fmtKickoff(game.kickoff_at)}</span>
+                {game.tv_network && <span>{game.tv_network}</span>}
+                <span>O/U {game.over_under != null ? fmt(game.over_under, 1) : '—'}</span>
+              </div>
+            </div>
+
+            <div style={{ height: 1, background: C.border, margin: '0 16px' }} />
+
+            {/* Row 2 — pick + tags */}
+            <div style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                {pm ? (
+                  <>
+                    <span style={{ ...FH, fontSize: 10.5, color: C.sub }}>PSS PICK</span>
+                    <span style={{ ...FM, fontSize: 13, color: C.text }}>{pp ? favored(pp.team, pp.num) : '—'}</span>
+                    <Badge color={DECISION_COLOR[pm.decision] || C.dim} filled>{fmt(pm.pss, 1)}</Badge>
+                    <span style={{ ...FM, fontSize: 11, color: C.sub }}>Edge {fmt(pm.edge, 1)} · STD {fmt(pm.stddev, 1)}</span>
+                  </>
+                ) : (
+                  <span style={{ ...FM, fontSize: 12, color: C.dim }}>PSS not computed yet</span>
+                )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {showBinBadge && <Badge color={PSS_BIN_COLOR[pm.pss_bin]} filled>{pm.pss_bin.toUpperCase()}</Badge>}
+                {showDecisionBadge && <Badge color={DECISION_COLOR[pm.decision]} filled>MODEL - {pm.decision}</Badge>}
+                {(research || []).map((r) => (
+                  <span key={r.id} style={{ ...FM, fontSize: 10.5, padding: '2px 6px 2px 8px', borderRadius: 10, border: `1px solid ${C.border}`, color: C.sub, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    {researchSideLabel(r, home, away)}{r.source_label ? ` · ${r.source_label}` : ''}
+                    <button onClick={() => onRemoveResearch(r.id)} style={{ background: 'none', border: 'none', color: C.dim, cursor: 'pointer', fontSize: 10, padding: 0, lineHeight: 1 }}>✕</button>
+                  </span>
+                ))}
+                {(plays || []).length === 0 ? (
+                  <button onClick={() => onOpenPickModal(null)} style={{ ...FM, fontSize: 10.5, padding: '3px 9px', borderRadius: 10, border: `1px dashed ${C.agree}`, background: 'transparent', color: C.agree, cursor: 'pointer' }}>
+                    + Add Pick
+                  </button>
+                ) : (
+                  (plays || []).map((p) => (
+                    <button key={p.id} onClick={() => onOpenPickModal(p)} style={{ ...FM, fontSize: 10.5, padding: '3px 9px', borderRadius: 10, border: `1px solid ${C.mine}`, background: `${C.mine}14`, color: C.mine, cursor: 'pointer' }}>
+                      BOBBY PICK · {(parseFloat(p.units) || 1).toFixed(p.units % 1 === 0 ? 0 : 1)}u {playLabel(p, home, away)}
+                    </button>
+                  ))
+                )}
+                <button onClick={onOpenResearchModal} style={{ ...FM, fontSize: 10.5, padding: '3px 9px', borderRadius: 10, border: `1px dashed ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer' }}>
+                  + Research
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <button onClick={onToggle} aria-label="Toggle details" style={{
+            width: 40, flexShrink: 0, border: 'none', borderLeft: `1px solid ${C.border}`,
+            background: expanded ? C.surface2 : 'transparent', color: C.sub, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13,
+          }}>
+            <span style={{ display: 'inline-block', transition: 'transform 0.15s', transform: expanded ? 'rotate(180deg)' : 'none' }}>▼</span>
+          </button>
+        </div>
+
+        {expanded && pm && (
+          <div style={{ borderTop: `1px solid ${C.border}`, background: C.surface2, padding: '16px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '14px 16px', marginBottom: 16 }}>
+              <Stat label="PICK" value={pp ? favored(pp.team, pp.num) : '—'} size={14} />
+              <Stat label="PSS SCORE" value={fmt(pm.pss, 1)} size={14} color={DECISION_COLOR[pm.decision]} />
+              <Stat label="BIN / DECISION" value={`${pm.pss_bin || '—'} / ${pm.decision || '—'}`} color={PSS_BIN_COLOR[pm.pss_bin]} />
+              <Stat label="TOP-K TIER" value={pm.qualifying_tier ? `${TIER_LABEL[pm.qualifying_tier]} · ${pm.signal_type}` : `No tier (eval. to Top-${pm.selected_k})`} />
+              <Stat label="EDGE / AGREEMENT" value={`${fmt(pm.edge, 2)} / ${pm.agreement != null ? `${Math.round(pm.agreement * 100)}%` : '—'}`} />
+              <Stat label="STDDEV" value={fmt(pm.stddev, 2)} />
+              <Stat label="MSS COMPONENT / MARKET ALIGNMENT" value={`${fmt(pm.mss_score, 1)} / ${pm.market_alignment || '—'}`} />
+              <Stat label="HISTORICAL TIER" value={pm.historical_tier || '—'} />
+              <Stat label="PSS RANK" value={rank ? `#${rank}` : '—'} />
+            </div>
+
+            <div style={{ ...FH, fontSize: 11, color: C.sub, marginBottom: 6 }}>DRIVERS</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+              {pm.pss_drivers?.length ? pm.pss_drivers.map((d, i) => <span key={i} style={{ ...FM, fontSize: 11, padding: '3px 8px', borderRadius: 3, background: `${C.agree}1F`, color: C.agree }}>+ {d}</span>) : <span style={{ ...FM, fontSize: 11, color: C.dim }}>None</span>}
+            </div>
+            <div style={{ ...FH, fontSize: 11, color: C.sub, marginBottom: 6 }}>WARNINGS</div>
+            <div style={{ ...FM, fontSize: 11.5, color: pm.warnings?.length ? C.warn : C.dim, marginBottom: 16 }}>
+              {pm.warnings?.length ? pm.warnings.join(', ') : 'None'}
+            </div>
+
+            <ModelBreakdownTable row={row} />
+          </div>
+        )}
+        {expanded && !pm && (
+          <div style={{ borderTop: `1px solid ${C.border}`, background: C.surface2, padding: '16px', ...FM, fontSize: 12, color: C.dim }}>
+            No PSS data for this game yet.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Multi-select filter dropdown (PSS Bin / PSS Play)
+// ---------------------------------------------------------------------------
+function MultiSelectFilter({ label, options, selected, onToggle, counts }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  const active = selected.size > 0;
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button onClick={() => setOpen((o) => !o)} style={{
+        ...FM, fontSize: 11.5, padding: '6px 12px', borderRadius: 3, cursor: 'pointer',
+        border: `1px solid ${active ? C.pss : C.border}`,
+        background: active ? `${C.pss}1A` : 'transparent',
+        color: active ? C.pss : C.sub,
+      }}>{label}{active ? ` (${selected.size})` : ''} ▾</button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 20, minWidth: 180,
+          background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, padding: 6,
+          boxShadow: '0 4px 14px rgba(0,0,0,0.4)',
+        }}>
+          {options.map((opt) => {
+            const isChecked = selected.has(opt.value);
+            return (
+              <label key={opt.value} style={{
+                ...FM, fontSize: 11.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                padding: '6px 8px', borderRadius: 3, cursor: 'pointer', color: isChecked ? C.pss : C.text,
+              }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input type="checkbox" checked={isChecked} onChange={() => onToggle(opt.value)} style={{ margin: 0, cursor: 'pointer' }} />
+                  {opt.label}
+                </span>
+                <span style={{ color: C.sub }}>{counts[opt.value] ?? 0}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Top-level dashboard
+// ---------------------------------------------------------------------------
+const FILTERS = [
+  { key: 'all', label: 'All Games' },
+  { key: 'model', label: 'Model Plays' },
+  { key: 'mine', label: "Bobby's Plays" },
+];
+const PSS_BIN_FILTER_OPTIONS = PSS_BIN_ORDER.filter((b) => b !== 'No Play').map((b) => ({ value: b, label: b }));
+const PSS_PLAY_FILTER_OPTIONS = [
+  { value: 'BET', label: 'Bet' },
+  { value: 'CONSIDER', label: 'Consider' },
+  { value: 'WATCH', label: 'Watch' },
+];
+
+export default function PssDashboard() {
   const [season, setSeason] = useState(2026);
   const [week, setWeek] = useState(null);
   const [rows, setRows] = useState([]);
   const [logos, setLogos] = useState({});
-  const [picksByGame, setPicksByGame] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const [sortKey, setSortKey] = useState('pss');
-  const [sortDir, setSortDir] = useState('desc');
-  const [search, setSearch] = useState('');
-  const [quickFilter, setQuickFilter] = useState('All');
-  const [minEdge, setMinEdge] = useState('');
+  const [expandedIds, setExpandedIds] = useState(new Set());
+  const [filter, setFilter] = useState('all');
+  const [pssBinFilter, setPssBinFilter] = useState(new Set());
+  const [pssPlayFilter, setPssPlayFilter] = useState(new Set());
+  const [teamSearch, setTeamSearch] = useState('');
+  const [sortBy, setSortBy] = useState('pss');
 
-  const [pickModalGame, setPickModalGame] = useState(null);
-  const [pickModalDefaultStatus, setPickModalDefaultStatus] = useState('official');
-  const [noteModalGame, setNoteModalGame] = useState(null);
-  const [detailGame, setDetailGame] = useState(null);
+  const [picksByGame, setPicksByGame] = useState({});
+  const [researchByGame, setResearchByGame] = useState({});
+  const [pickModal, setPickModal] = useState(null); // { row, existing }
+  const [researchModalRow, setResearchModalRow] = useState(null);
+  const [showLegend, setShowLegend] = useState(false);
+  const [showStats, setShowStats] = useState(false);
+  const [showCard, setShowCard] = useState(false);
 
-  const [showMobileTable, setShowMobileTable] = useState(false);
-  const [mobileSort, setMobileSort] = useState('pss');
-
-  const [showSeasonStats, setShowSeasonStats] = useState(false);
-  const [seasonStats, setSeasonStats] = useState(null);
-  const [seasonStatsLoading, setSeasonStatsLoading] = useState(false);
-
-  async function loadSeasonStats() {
-    setSeasonStatsLoading(true);
-    try {
-      const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/pss_game_metrics?select=id,edge,pss_bin,qualifies,pss_pick_grades(ats_result)&season=eq.${season}`,
-        { headers: SB_HEADERS }
-      );
-      const rows = res.ok ? await res.json() : [];
-      const graded = rows
-        .map((m) => ({ ...m, pg: Array.isArray(m.pss_pick_grades) ? m.pss_pick_grades[0] : m.pss_pick_grades }))
-        .filter((m) => m.pg);
-
-      const tally = (results) => results.reduce((acc, r) => {
-        if (r === 'win') acc.w++; else if (r === 'loss') acc.l++; else if (r === 'push') acc.p++;
-        return acc;
-      }, { w: 0, l: 0, p: 0 });
-
-      const allSlate = tally(graded.map((m) => m.pg.ats_result));
-      const qualified = tally(graded.filter((m) => m.qualifies).map((m) => m.pg.ats_result));
-
-      const binMap = new Map();
-      for (const m of graded) {
-        const bin = m.pss_bin || 'No Play';
-        const row = binMap.get(bin) || [];
-        row.push(m.pg.ats_result);
-        binMap.set(bin, row);
-      }
-      const binRows = PSS_BIN_ORDER
-        .filter((b) => binMap.has(b))
-        .map((b) => ({ label: b, record: tally(binMap.get(b)) }));
-
-      setSeasonStats({ allSlate, qualified, binRows, totalGraded: graded.length });
-    } finally {
-      setSeasonStatsLoading(false);
-    }
-  }
+  useEffect(() => {
+    let cancelled = false;
+    sbFetch(`games?select=week&season=eq.${season}&order=week.desc&limit=1`)
+      .then((r) => { if (!cancelled) setWeek(r.length ? r[0].week : 1); })
+      .catch(() => { if (!cancelled) setWeek(1); });
+    return () => { cancelled = true; };
+  }, [season]);
 
   async function loadWeek() {
     setLoading(true); setError(null);
     try {
-      const gamesUrl = `${SUPABASE_URL}/rest/v1/games?select=id,home_team,away_team,kickoff_at,current_line,opening_line,closing_line,over_under,tv_network,status,home_score,away_score&season=eq.${season}&week=eq.${week}`;
-      const logosUrl = `${SUPABASE_URL}/rest/v1/team_logos?select=team_name,logo_url`;
-      const [gamesRes, logosRes] = await Promise.all([
-        fetch(gamesUrl, { headers: SB_HEADERS }),
-        fetch(logosUrl, { headers: SB_HEADERS }),
+      const [games, logoRows] = await Promise.all([
+        sbFetch(
+          `games?select=id,home_team,away_team,kickoff_at,current_line,opening_line,over_under,tv_network,status,` +
+          `pss_game_metrics(pss,pss_bin,decision,qualifies,qualifying_tier,signal_type,selected_k,agreement,agreement_count,agreement_k,stddev,edge,consensus_spread,vegas_line,suggested_side,suggested_line,pss_drivers,warnings,raw_mss,mss_score,edge_score,agreement_score,stddev_score,historical_score,market_alignment,historical_tier,selected_model_ids)` +
+          `&season=eq.${season}&week=eq.${week}`
+        ),
+        sbFetch(`team_logos?select=team_name,logo_url`),
       ]);
-      if (!gamesRes.ok) throw new Error(`Supabase error ${gamesRes.status}`);
-      const gamesData = await gamesRes.json();
-      const logosData = logosRes.ok ? await logosRes.json() : [];
       const logoMap = {};
-      for (const l of logosData) logoMap[l.team_name] = l.logo_url;
-
-      let metricsByGame = {};
-      let picksData = [];
-      if (gamesData.length > 0) {
-        const ids = gamesData.map((g) => g.id).join(',');
-        const [metricsRes, picksRes] = await Promise.all([
-          fetch(`${SUPABASE_URL}/rest/v1/pss_game_metrics?select=*&game_id=in.(${ids})`, { headers: SB_HEADERS }),
-          fetch(`${SUPABASE_URL}/rest/v1/pss_user_picks?select=*&game_id=in.(${ids})`, { headers: SB_HEADERS }),
-        ]);
-        if (metricsRes.ok) {
-          const metrics = await metricsRes.json();
-          for (const m of metrics) metricsByGame[m.game_id] = m;
-        }
-        if (picksRes.ok) picksData = await picksRes.json();
-      }
-      const byGame = {};
-      for (const p of picksData) byGame[p.game_id] = p;
-
-      setRows(gamesData.map((g) => ({ ...g, _m: metricsByGame[g.id] || null })));
+      for (const l of logoRows) logoMap[l.team_name] = l.logo_url;
+      const built = games.map((g) => ({
+        game: g,
+        pm: Array.isArray(g.pss_game_metrics) ? g.pss_game_metrics[0] : g.pss_game_metrics,
+      }));
+      setRows(built);
       setLogos(logoMap);
-      setPicksByGame(byGame);
+
+      if (games.length > 0) {
+        const ids = games.map((g) => g.id).join(',');
+        try {
+          const picks = await sbFetch(`user_picks?select=*&game_id=in.(${ids})&pick_type=neq.note&status=neq.lean&order=created_at.asc`);
+          const grouped = {};
+          for (const p of picks) {
+            if (!grouped[p.game_id]) grouped[p.game_id] = [];
+            grouped[p.game_id].push(p);
+          }
+          setPicksByGame(grouped);
+        } catch (e) { console.error('Failed to load picks:', e); setPicksByGame({}); }
+        try {
+          const research = await sbFetch(`research_picks?select=*&game_id=in.(${ids})&order=created_at.asc`);
+          const grouped = {};
+          for (const r of research) {
+            if (!grouped[r.game_id]) grouped[r.game_id] = [];
+            grouped[r.game_id].push(r);
+          }
+          setResearchByGame(grouped);
+        } catch (e) { console.error('Failed to load research picks:', e); setResearchByGame({}); }
+      } else {
+        setPicksByGame({});
+        setResearchByGame({});
+      }
     } catch (e) {
       setError(String(e.message || e));
     } finally {
@@ -665,555 +979,203 @@ export default function PSSDashboard() {
     }
   }
 
-  useEffect(() => {
-    let cancelled = false;
-    // Default to the latest week that has any games scheduled (not just final),
-    // so the board shows the current week's games as soon as they are seeded.
-    fetch(
-      `${SUPABASE_URL}/rest/v1/games?select=week&season=eq.${season}&order=week.desc&limit=1`,
-      { headers: SB_HEADERS }
-    )
-      .then((r) => r.json())
-      .then((rows) => { if (!cancelled) setWeek(rows.length ? rows[0].week : 1); })
-      .catch(() => { if (!cancelled) setWeek(1); });
-    return () => { cancelled = true; };
-  }, [season]);
+  useEffect(() => { if (week != null) loadWeek(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [season, week]);
 
-  useEffect(() => { if (week != null) loadWeek(); }, [season, week]);
+  const toggle = (id) => setExpandedIds((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
-  function refreshAfterPickChange() {
-    setPickModalGame(null);
-    loadWeek();
-  }
-
-  async function toggleLean(row) {
-    if (row.pick?.status === 'official') return;
-    if (row.pick?.status === 'lean') {
-      if (row.pick?.id) await fetch(`${SUPABASE_URL}/rest/v1/pss_user_picks?id=eq.${row.pick.id}`, { method: 'DELETE', headers: SB_HEADERS });
-    } else {
-      const side = row.suggested_side || 'home';
-      const line = row.vegas_line != null ? parseFloat(row.vegas_line) : null;
-      await fetch(`${SUPABASE_URL}/rest/v1/pss_user_picks`, {
-        method: 'POST', headers: { ...SB_HEADERS, Prefer: 'return=representation' },
-        body: JSON.stringify({ game_id: row.id, pss_game_metrics_id: row.pss_id, played: true, pick_type: 'spread', side, line_played: line, units: 1, status: 'lean', season, week }),
+  async function savePick(gameId, data) {
+    const existing = pickModal?.existing;
+    if (existing) {
+      const [updated] = await sbFetch(`user_picks?id=eq.${existing.id}`, {
+        method: 'PATCH', body: JSON.stringify({ ...data, updated_at: new Date().toISOString() }),
       });
+      setPicksByGame((prev) => ({ ...prev, [gameId]: (prev[gameId] || []).map((p) => p.id === existing.id ? updated : p) }));
+    } else {
+      const [created] = await sbFetch(`user_picks`, {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, season, week, played: true, status: 'official', ...data }),
+      });
+      setPicksByGame((prev) => ({ ...prev, [gameId]: [...(prev[gameId] || []), created] }));
     }
-    loadWeek();
+    setPickModal(null);
+  }
+  async function deletePick(gameId) {
+    const existing = pickModal?.existing;
+    if (existing) {
+      await sbFetch(`user_picks?id=eq.${existing.id}`, { method: 'DELETE' });
+      setPicksByGame((prev) => ({ ...prev, [gameId]: (prev[gameId] || []).filter((p) => p.id !== existing.id) }));
+    }
+    setPickModal(null);
   }
 
-  // Flatten games + pss metrics into display rows
-  const flat = useMemo(() => {
-    return rows.map((g) => {
-      const m = g._m;
-      const pick = picksByGame[g.id] || null;
-      return {
-        id: g.id,
-        pss_id: m?.id ?? null,
-        season, week,
-        matchup: `${g.away_team} @ ${g.home_team}`,
-        away_team: g.away_team,
-        home_team: g.home_team,
-        kickoff_at: g.kickoff_at,
-        status: g.status,
-        home_score: g.home_score,
-        away_score: g.away_score,
-        tv_network: g.tv_network,
-        over_under: g.over_under,
-        vegas_line: m?.vegas_line ?? g.current_line,
-        current_line: m?.current_line ?? g.current_line,
-        opening_line: m?.opening_line ?? g.opening_line,
-        consensus_spread: m?.consensus_spread ?? null,
-        edge: m?.edge ?? null,
-        pss: m?.pss ?? null,
-        pss_bin: m?.pss_bin ?? null,
-        selected_k: m?.selected_k ?? null,
-        selected_model_ids: m?.selected_model_ids ?? [],
-        signal_type: m?.signal_type ?? null,
-        qualifies: !!m?.qualifies,
-        qualifying_tier: m?.qualifying_tier ?? null,
-        attempted_tier: m?.qualifying_tier ?? (m?.selected_k === 3 ? 'top3' : m?.selected_k === 5 ? 'top5' : 'top7'),
-        agreement: m?.agreement ?? null,
-        agreement_count: m?.agreement_count ?? null,
-        agreement_k: m?.agreement_k ?? null,
-        stddev: m?.stddev ?? null,
-        model_range: m?.model_range ?? null,
-        raw_mss: m?.raw_mss ?? null,
-        edge_score: m?.edge_score ?? null,
-        mss_score: m?.mss_score ?? null,
-        agreement_score: m?.agreement_score ?? null,
-        stddev_score: m?.stddev_score ?? null,
-        historical_tier: m?.historical_tier ?? null,
-        historical_score: m?.historical_score ?? null,
-        veto_triggered: !!m?.veto_triggered,
-        veto_reasons: m?.veto_reasons ?? [],
-        decision: m?.decision ?? null,
-        suggested_side: m?.suggested_side ?? null,
-        suggested_line: m?.suggested_line ?? null,
-        line_move: m?.line_move ?? null,
-        edge_at_open: m?.edge_at_open ?? null,
-        edge_retention: m?.edge_retention ?? null,
-        edge_cushion: m?.edge_cushion ?? null,
-        market_alignment: m?.market_alignment ?? null,
-        pss_drivers: m?.pss_drivers ?? [],
-        warnings: m?.warnings ?? [],
-        pick,
-      };
+  async function saveResearchPick(gameId, home, away, data) {
+    const [created] = await sbFetch(`research_picks`, {
+      method: 'POST',
+      body: JSON.stringify({ game_id: gameId, season, week, home_team: home, away_team: away, ...data }),
     });
-  }, [rows, picksByGame, season, week]);
+    setResearchByGame((prev) => ({ ...prev, [gameId]: [...(prev[gameId] || []), created] }));
+    setResearchModalRow(null);
+  }
+  async function removeResearchPick(gameId, id) {
+    await sbFetch(`research_picks?id=eq.${id}`, { method: 'DELETE' });
+    setResearchByGame((prev) => ({ ...prev, [gameId]: (prev[gameId] || []).filter((r) => r.id !== id) }));
+  }
 
-  const filtered = useMemo(() => {
-    let out = flat.filter((r) => r.pss != null); // only games PSS has computed
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      out = out.filter((r) => r.home_team.toLowerCase().includes(q) || r.away_team.toLowerCase().includes(q));
-    }
-    if (quickFilter === 'Elite') out = out.filter((r) => r.pss_bin === 'Elite');
-    else if (quickFilter === 'Very Strong+') out = out.filter((r) => ['Elite', 'Very Strong'].includes(r.pss_bin));
-    else if (quickFilter === 'Top 3') out = out.filter((r) => r.qualifying_tier === 'top3');
-    else if (quickFilter === 'Top 5') out = out.filter((r) => r.qualifying_tier === 'top5');
-    else if (quickFilter === 'Top 7') out = out.filter((r) => r.qualifying_tier === 'top7');
-    else if (quickFilter === 'Warnings') out = out.filter((r) => (r.warnings || []).length > 0);
-    else if (quickFilter === 'Model Picks Only') out = out.filter((r) => r.qualifies);
-    if (minEdge !== '') {
-      const threshold = parseFloat(minEdge);
-      if (!Number.isNaN(threshold)) out = out.filter((r) => r.edge !== null && Math.abs(parseFloat(r.edge)) >= threshold);
-    }
-    return out;
-  }, [flat, search, quickFilter, minEdge]);
-
-  const rankByGameId = useMemo(() => {
-    const ranked = [...flat].filter((r) => r.pss != null).sort((a, b) => (b.pss ?? -Infinity) - (a.pss ?? -Infinity));
+  const pssRankMap = useMemo(() => {
+    const ranked = [...rows].filter((r) => r.pm != null).sort((a, b) => b.pm.pss - a.pm.pss);
     const map = {};
-    ranked.forEach((r, i) => { map[r.id] = i + 1; });
+    ranked.forEach((r, i) => { map[r.game.id] = i + 1; });
     return map;
-  }, [flat]);
+  }, [rows]);
 
-  const sorted = useMemo(() => {
-    const out = [...filtered];
-    out.sort((a, b) => {
-      let av = sortKey === 'rank' ? rankByGameId[a.id] : a[sortKey];
-      let bv = sortKey === 'rank' ? rankByGameId[b.id] : b[sortKey];
-      if (sortKey === 'pss_bin') {
-        av = PSS_BIN_ORDER.indexOf(av); bv = PSS_BIN_ORDER.indexOf(bv);
-        if (av === -1) av = 99; if (bv === -1) bv = 99;
-      } else if (sortKey === 'decision') {
-        av = DECISION_ORDER.indexOf(av); bv = DECISION_ORDER.indexOf(bv);
-        if (av === -1) av = 99; if (bv === -1) bv = 99;
-      } else if (sortKey === 'kickoff_at') {
-        av = av ? new Date(av).getTime() : Infinity; bv = bv ? new Date(bv).getTime() : Infinity;
-      } else if (typeof av === 'string' && av !== null && !Number.isNaN(parseFloat(av))) {
-        av = parseFloat(av); bv = parseFloat(bv);
-      }
-      if (av === null || av === undefined) return 1;
-      if (bv === null || bv === undefined) return -1;
-      if (av < bv) return sortDir === 'asc' ? -1 : 1;
-      if (av > bv) return sortDir === 'asc' ? 1 : -1;
-      return 0;
-    });
-    return out;
-  }, [filtered, sortKey, sortDir, rankByGameId]);
+  const counts = useMemo(() => ({
+    all: rows.length,
+    model: rows.filter((r) => r.pm?.decision === 'BET').length,
+    mine: rows.filter((r) => (picksByGame[r.game.id] || []).length > 0).length,
+  }), [rows, picksByGame]);
 
-  function toggleSort(key) {
-    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    else { setSortKey(key); setSortDir(key === 'kickoff_at' ? 'asc' : 'desc'); }
+  const pssBinCounts = useMemo(() => {
+    const c = {};
+    for (const opt of PSS_BIN_FILTER_OPTIONS) c[opt.value] = rows.filter((r) => r.pm?.pss_bin === opt.value).length;
+    return c;
+  }, [rows]);
+  const pssPlayCounts = useMemo(() => {
+    const c = {};
+    for (const opt of PSS_PLAY_FILTER_OPTIONS) c[opt.value] = rows.filter((r) => r.pm?.decision === opt.value).length;
+    return c;
+  }, [rows]);
+
+  function toggleSetValue(setter, value) {
+    setter((prev) => { const n = new Set(prev); n.has(value) ? n.delete(value) : n.add(value); return n; });
   }
 
-  const COLUMNS = [
-    { key: 'rank', label: 'Rank' },
-    { key: 'matchup', label: 'Matchup', sticky: true },
-    { key: 'kickoff_at', label: 'Kickoff' },
-    { key: 'market_spread', label: 'Market Spread', sortKey: 'vegas_line' },
-    { key: 'model_pick', label: 'Model Pick', sortKey: 'suggested_side' },
-    { key: 'edge', label: 'Edge' },
-    { key: 'pss', label: 'PSS' },
-    { key: 'pss_bin', label: 'Bin' },
-    { key: 'topk', label: 'Top-K', sortKey: 'selected_k' },
-    { key: 'mss_score', label: 'MSS' },
-    { key: 'agreement', label: 'Agreement' },
-    { key: 'stddev', label: 'STD' },
-    { key: 'historical_tier', label: 'Hist. Conf' },
-    { key: 'line_move', label: 'Move' },
-    { key: 'market_alignment', label: 'Alignment' },
-    { key: 'decision', label: 'Decision' },
-    { key: 'drivers', label: 'Drivers' },
-    { key: 'warnings', label: 'Warnings' },
-    { key: 'lean', label: 'Lean' },
-    { key: 'play', label: 'My Play' },
-    { key: 'notes', label: 'Notes' },
-  ];
+  const displayed = useMemo(() => {
+    let list = rows.filter((r) => {
+      if (filter === 'model' && r.pm?.decision !== 'BET') return false;
+      if (filter === 'mine' && (picksByGame[r.game.id] || []).length === 0) return false;
+      if (pssBinFilter.size > 0 && !pssBinFilter.has(r.pm?.pss_bin)) return false;
+      if (pssPlayFilter.size > 0 && !pssPlayFilter.has(r.pm?.decision)) return false;
+      if (teamSearch.trim()) {
+        const q = teamSearch.trim().toLowerCase();
+        if (!r.game.home_team.toLowerCase().includes(q) && !r.game.away_team.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+    list.sort((a, b) => {
+      if (sortBy === 'kickoff') return new Date(a.game.kickoff_at || 0) - new Date(b.game.kickoff_at || 0);
+      if (sortBy === 'team') return a.game.away_team.localeCompare(b.game.away_team);
+      return (b.pm?.pss ?? -Infinity) - (a.pm?.pss ?? -Infinity);
+    });
+    return list;
+  }, [rows, filter, pssBinFilter, pssPlayFilter, teamSearch, sortBy, picksByGame]);
+
+  const selectStyle = { ...FM, fontSize: 11.5, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, padding: '7px 9px', color: C.text, cursor: 'pointer' };
 
   return (
-    <div className="page pss-page">
-      <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <h1>🧠 BobbyPSSModel — PSS Dashboard</h1>
-          <p>Dynamic Top-K qualification (3/5/7) &amp; Play Strength Score — ranked, weighted signals across all games</p>
-        </div>
-        <button
-          className="btn btn-outline"
-          style={{ fontSize: 12 }}
-          onClick={() => { setShowSeasonStats((v) => !v); if (!showSeasonStats && !seasonStats) loadSeasonStats(); }}
-        >
-          📊 Season Stats
-        </button>
-      </div>
+    <div style={{ minHeight: '100vh', background: C.bg, padding: '24px 16px', color: C.text }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap'); select option { background: ${C.surface}; }`}</style>
 
-      {showSeasonStats && (
-        <div className="card" style={{ marginBottom: 20 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-            <div style={{ fontSize: 14, fontWeight: 800 }}>PSS Season Stats — {season}</div>
-            <button className="btn btn-outline" style={{ fontSize: 11, padding: '4px 10px' }} onClick={loadSeasonStats}>↻ Refresh</button>
+      <div style={{ maxWidth: 1000, margin: '0 auto' }}>
+        {showLegend && <LegendModal onClose={() => setShowLegend(false)} />}
+        {showStats && week != null && <SeasonStatsModal season={season} week={week} onClose={() => setShowStats(false)} />}
+        {showCard && <MyCardModal rows={rows} picksByGame={picksByGame} season={season} onClose={() => setShowCard(false)} />}
+        {pickModal && (
+          <PickModal
+            game={pickModal.row.game}
+            existing={pickModal.existing}
+            onClose={() => setPickModal(null)}
+            onSaved={(data) => savePick(pickModal.row.game.id, data)}
+            onDeleted={() => deletePick(pickModal.row.game.id)}
+          />
+        )}
+        {researchModalRow && (
+          <ResearchPickModal
+            game={researchModalRow.game}
+            onClose={() => setResearchModalRow(null)}
+            onSaved={(data) => saveResearchPick(researchModalRow.game.id, researchModalRow.game.home_team, researchModalRow.game.away_team, data)}
+          />
+        )}
+
+        {/* Top bar */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18, flexWrap: 'wrap', gap: 12 }}>
+          <div>
+            <div style={{ ...FM, fontSize: 11, color: C.sub, letterSpacing: 1, marginBottom: 2 }}>BOBBYMODELS · CFB</div>
+            <div style={{ ...FH, fontSize: 22, fontWeight: 600, letterSpacing: -0.3 }}>🧠 PSS Dashboard</div>
+            <div style={{ ...FM, fontSize: 12, color: C.sub, marginTop: 2, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span>Season</span>
+              <input type="number" value={season} onChange={(e) => setSeason(parseInt(e.target.value) || season)} style={{ ...selectStyle, width: 68 }} />
+              <span>Week</span>
+              <input type="number" value={week ?? ''} onChange={(e) => setWeek(parseInt(e.target.value) || week)} style={{ ...selectStyle, width: 50 }} />
+            </div>
           </div>
-          {seasonStatsLoading && <div className="empty">Loading…</div>}
-          {!seasonStatsLoading && seasonStats && (
-            <>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 16 }}>
-                <SeasonStatCard title="Full Slate" record={seasonStats.allSlate} note="Every graded game this season" />
-                <SeasonStatCard title="Qualified Plays" record={seasonStats.qualified} note="Cleared Dynamic Top-K qualification" highlight />
-              </div>
-              <div style={{ fontSize: 12, color: '#8a92a3', fontWeight: 700, marginBottom: 8 }}>By PSS Bin</div>
-              <div className="tbl-wrap">
-                <table>
-                  <thead><tr><th>Bin</th><th>Games</th><th>W-L-P</th><th>ATS%</th></tr></thead>
-                  <tbody>
-                    {seasonStats.binRows.map((r) => {
-                      const decided = r.record.w + r.record.l;
-                      const p = decided > 0 ? r.record.w / decided : null;
-                      return (
-                        <tr key={r.label}>
-                          <td><Badge text={r.label} colors={PSS_BIN_COLOR[r.label]} /></td>
-                          <td>{decided + r.record.p}</td>
-                          <td>{r.record.w}-{r.record.l}{r.record.p ? `-${r.record.p}` : ''}</td>
-                          <td>{p != null ? <span style={{ color: p >= 0.524 ? '#38bd94' : '#f87171', fontWeight: 700 }}>{(p * 100).toFixed(1)}%</span> : '—'}</td>
-                        </tr>
-                      );
-                    })}
-                    {seasonStats.binRows.length === 0 && <tr><td colSpan={4} className="empty">No graded PSS games yet this season.</td></tr>}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Controls */}
-      <div className="card pss-controls">
-        <div className="pss-controls-row">
-          <label>Season</label>
-          <input type="number" value={season} onChange={(e) => setSeason(+e.target.value)} className="pss-input" style={{ width: 90 }} />
-          <label>Week</label>
-          <input type="number" value={week ?? ''} onChange={(e) => setWeek(+e.target.value)} className="pss-input" style={{ width: 70 }} />
-          <input type="text" placeholder="Search team…" value={search} onChange={(e) => setSearch(e.target.value)} className="pss-input" style={{ flex: 1, minWidth: 160 }} />
-          <label>Min |Edge|</label>
-          <input type="number" step="0.5" value={minEdge} onChange={(e) => setMinEdge(e.target.value)} className="pss-input" style={{ width: 80 }} />
-        </div>
-        <div className="pss-quickfilters">
-          {QUICK_FILTERS.map((f) => (
-            <button key={f} className={`pss-chip-btn ${quickFilter === f ? 'active' : ''}`} onClick={() => setQuickFilter(f)}>{f}</button>
-          ))}
-        </div>
-      </div>
-
-      {loading && <div className="loading">Loading…</div>}
-      {error && <div className="error-msg">{error}</div>}
-
-      {!loading && !error && (
-        <>
-          {/* ═══ DESKTOP TABLE ═══ */}
-          <div className="tbl-wrap pss-desktop-only">
-            <table>
-              <thead>
-                <tr>
-                  {COLUMNS.map((c) => (
-                    <th
-                      key={c.key}
-                      className={`sortable ${c.sticky ? 'sticky-col' : ''}`}
-                      onClick={() => toggleSort(c.sortKey || c.key)}
-                    >
-                      {c.label}
-                      {TOOLTIPS[c.key] && <InfoIcon text={TOOLTIPS[c.key]} />}
-                      {sortKey === (c.sortKey || c.key) && (sortDir === 'asc' ? ' ▲' : ' ▼')}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((r) => {
-                  const decColor = DECISION_COLOR[r.decision] || {};
-                  const binColor = PSS_BIN_COLOR[r.pss_bin] || {};
-                  const awayLogo = logos[r.away_team];
-                  const homeLogo = logos[r.home_team];
-                  const rowClass = r.decision === 'BET' ? 'pss-row-bet' : r.decision === 'CONSIDER' ? 'pss-row-consider' : r.decision === 'REVIEW' ? 'pss-row-review' : '';
-                  return (
-                    <tr key={r.id} className={rowClass} onClick={() => setDetailGame(r)} style={{ cursor: 'pointer' }}>
-                      <td>#{rankByGameId[r.id]}</td>
-                      <td className="sticky-col" onClick={(e) => e.stopPropagation()}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, cursor: 'pointer' }} onClick={() => setDetailGame(r)}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><TeamLogo src={awayLogo} alt="" />{r.away_team}</div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><TeamLogo src={homeLogo} alt="" />{r.home_team}</div>
-                        </div>
-                      </td>
-                      <td>{fmtKickoff(r.kickoff_at)}</td>
-                      <td>{favoredDisplay(r.vegas_line, r.home_team, r.away_team)}</td>
-                      <td>
-                        {(() => {
-                          const mp = modelPick(r);
-                          if (!mp) return '—';
-                          const mpLogo = logos[mp.team];
-                          return <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><TeamLogo src={mpLogo} alt="" />{mp.team} {fmtLine(fmt(mp.num, 1))}</span>;
-                        })()}
-                      </td>
-                      <td>{fmtLine(fmt(r.edge, 1))}</td>
-                      <td style={{ fontWeight: 800 }}>{fmt(r.pss, 1)}</td>
-                      <td><Badge text={r.pss_bin} colors={binColor} /></td>
-                      <td>{r.selected_k ? `${SIGNAL_ICON[r.signal_type] || ''} ${TIER_LABEL[r.attempted_tier] || `Top ${r.selected_k}`}` : '—'}</td>
-                      <td>{fmt(r.mss_score, 0)}</td>
-                      <td>{r.agreement_count}/{r.agreement_k} ({fmtPct(r.agreement)})</td>
-                      <td>{fmt(r.stddev, 2)}</td>
-                      <td>{r.historical_tier || '—'}</td>
-                      <td>{r.line_move != null ? fmtLine(fmt(r.line_move, 1)) : '—'}</td>
-                      <td>{r.market_alignment || '—'}</td>
-                      <td><Badge text={r.decision} colors={decColor} /></td>
-                      <td style={{ maxWidth: 200, whiteSpace: 'normal', fontSize: 11, color: '#8a92a3' }}>{(r.pss_drivers || []).join(' • ') || '—'}</td>
-                      <td>{(r.warnings || []).length > 0 ? <Badge text={`${r.warnings.length} ⚠`} colors={{ fg: '#fb923c', bg: 'rgba(251,146,60,.15)' }} title={r.warnings.join(', ')} /> : '—'}</td>
-                      <td className="center" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          className="btn btn-outline"
-                          style={{ padding: '3px 10px', fontSize: 11, opacity: r.pick?.status === 'official' ? 0.4 : 1 }}
-                          disabled={r.pick?.status === 'official'}
-                          onClick={() => toggleLean(r)}
-                        >
-                          {r.pick?.status === 'lean' ? '★ Lean' : '☆ Lean'}
-                        </button>
-                      </td>
-                      <td className="center" onClick={(e) => e.stopPropagation()}>
-                        {r.pick?.status === 'official' ? (
-                          <button className="play-badge" onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}>
-                            {r.pick.pick_type === 'total'
-                              ? `${r.pick.side === 'over' ? 'O' : 'U'} ${r.pick.line_played}`
-                              : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`} {r.pick.units}u
-                          </button>
-                        ) : (
-                          <button className="btn btn-outline" style={{ padding: '3px 10px', fontSize: 11 }} onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}>+</button>
-                        )}
-                      </td>
-                      <td className="center" onClick={(e) => e.stopPropagation()}>
-                        <button className="btn btn-outline" style={{ padding: '3px 10px', fontSize: 11 }} onClick={() => setNoteModalGame(r)}>
-                          {r.pick?.note ? '📝' : '+'}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {sorted.length === 0 && <tr><td colSpan={COLUMNS.length} className="empty">No games match the current filters, or PSS hasn't been computed for this week yet.</td></tr>}
-              </tbody>
-            </table>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={() => setShowLegend(true)} style={{ ...FM, fontSize: 11.5, padding: '7px 12px', borderRadius: 4, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer' }}>? Legend</button>
+            <button onClick={() => setShowStats(true)} style={{ ...FM, fontSize: 11.5, padding: '7px 12px', borderRadius: 4, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer' }}>📊 Season stats</button>
+            <button onClick={() => setShowCard(true)} style={{ ...FM, fontSize: 11.5, padding: '7px 12px', borderRadius: 4, border: `1px solid ${C.pss}`, background: `${C.pss}1A`, color: C.pss, cursor: 'pointer' }}>🎯 My card</button>
           </div>
+        </div>
 
-          {/* ═══ MOBILE CARDS ═══ */}
-          <div className="pss-mobile-only">
-            <div className="pss-mob-toolbar">
-              <select className="pss-input" value={mobileSort} onChange={(e) => setMobileSort(e.target.value)}>
-                <option value="pss">PSS</option>
-                <option value="kickoff_at">Kickoff</option>
-                <option value="edge">Edge</option>
-                <option value="agreement">Agreement</option>
+        {error && <div style={{ ...FM, fontSize: 12, color: C.warn, background: `${C.warn}14`, border: `1px solid ${C.warn}`, borderRadius: 4, padding: '10px 14px', marginBottom: 16 }}>{error}</div>}
+
+        {!loading && !error && (
+          <>
+            {/* Filters + search + sort */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+              {FILTERS.map((f) => (
+                <button key={f.key} onClick={() => setFilter(f.key)} style={{
+                  ...FM, fontSize: 11.5, padding: '6px 12px', borderRadius: 3, cursor: 'pointer',
+                  border: `1px solid ${filter === f.key ? C.pss : C.border}`,
+                  background: filter === f.key ? `${C.pss}1A` : 'transparent',
+                  color: filter === f.key ? C.pss : C.sub,
+                }}>{f.label} ({counts[f.key]})</button>
+              ))}
+              <MultiSelectFilter
+                label="PSS Bin"
+                options={PSS_BIN_FILTER_OPTIONS}
+                selected={pssBinFilter}
+                onToggle={(v) => toggleSetValue(setPssBinFilter, v)}
+                counts={pssBinCounts}
+              />
+              <MultiSelectFilter
+                label="PSS Play"
+                options={PSS_PLAY_FILTER_OPTIONS}
+                selected={pssPlayFilter}
+                onToggle={(v) => toggleSetValue(setPssPlayFilter, v)}
+                counts={pssPlayCounts}
+              />
+              <input
+                type="text" placeholder="Search team…" value={teamSearch}
+                onChange={(e) => setTeamSearch(e.target.value)}
+                style={{ ...selectStyle, width: 140, outline: 'none' }}
+              />
+              <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={{ ...selectStyle, marginLeft: 'auto' }}>
+                <option value="pss">Sort: PSS Score</option>
+                <option value="kickoff">Sort: Game time</option>
+                <option value="team">Sort: Team</option>
               </select>
             </div>
-            {(() => {
-              let mobileRows = [...sorted];
-              mobileRows.sort((a, b) => {
-                if (mobileSort === 'kickoff_at') {
-                  const at = a.kickoff_at ? new Date(a.kickoff_at).getTime() : Infinity;
-                  const bt = b.kickoff_at ? new Date(b.kickoff_at).getTime() : Infinity;
-                  return at - bt;
-                }
-                const av = a[mobileSort] != null ? parseFloat(a[mobileSort]) : -Infinity;
-                const bv = b[mobileSort] != null ? parseFloat(b[mobileSort]) : -Infinity;
-                return bv - av;
-              });
-              if (mobileRows.length === 0) return <div className="empty">No games match the current filters.</div>;
-              return mobileRows.map((r) => {
-                const binColor = PSS_BIN_COLOR[r.pss_bin] || {};
-                const decColor = DECISION_COLOR[r.decision] || {};
-                const awayLogo = logos[r.away_team];
-                const homeLogo = logos[r.home_team];
-                return (
-                  <div key={r.id} className="pss-mcard" onClick={() => setDetailGame(r)}>
-                    <div className="pss-mcard-header">
-                      <span className="pss-mcard-rank">#{rankByGameId[r.id]}</span>
-                      <div className="pss-mcard-teams">
-                        <div><TeamLogo src={awayLogo} alt="" /> {r.away_team}</div>
-                        <div><TeamLogo src={homeLogo} alt="" /> {r.home_team}</div>
-                      </div>
-                      <Badge text={r.pss_bin} colors={binColor} />
-                    </div>
-                    <div className="pss-mcard-meta">
-                      <span>{fmtKickoff(r.kickoff_at)}</span>
-                      {r.tv_network && <span>{r.tv_network}</span>}
-                    </div>
-                    <div className="pss-mcard-grid">
-                      <div><span>Market<MobInfoIcon text={TOOLTIPS.market_spread} /></span><b>{favoredDisplay(r.vegas_line, r.home_team, r.away_team)}</b></div>
-                      <div>
-                        <span>Model Pick<MobInfoIcon text={TOOLTIPS.model_pick} /></span>
-                        <b style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          {(() => {
-                            const mp = modelPick(r);
-                            if (!mp) return '—';
-                            return <><TeamLogo src={logos[mp.team]} alt="" />{mp.team} {fmtLine(fmt(mp.num, 1))}</>;
-                          })()}
-                        </b>
-                      </div>
-                      <div><span>Edge<MobInfoIcon text={TOOLTIPS.edge} /></span><b>{fmtLine(fmt(r.edge, 1))}</b></div>
-                      <div><span>PSS<MobInfoIcon text={TOOLTIPS.pss} /></span><b>{fmt(r.pss, 1)}</b></div>
-                      <div><span>Top-K<MobInfoIcon text={TOOLTIPS.topk} /></span><b>{r.selected_k ? `${TIER_LABEL[r.attempted_tier] || `Top ${r.selected_k}`}` : '—'}</b></div>
-                      <div><span>Agreement<MobInfoIcon text={TOOLTIPS.agreement} /></span><b>{r.agreement_count}/{r.agreement_k}</b></div>
-                      <div><span>STD<MobInfoIcon text={TOOLTIPS.stddev} /></span><b>{fmt(r.stddev, 2)}</b></div>
-                      <div><span>Decision<MobInfoIcon text={TOOLTIPS.decision} /></span><b><Badge text={r.decision} colors={decColor} /></b></div>
-                    </div>
-                    {r.pss_drivers?.length > 0 && (
-                      <div className="pss-mcard-drivers">{r.pss_drivers.join(' • ')}</div>
-                    )}
-                    {r.warnings?.length > 0 && (
-                      <div className="pss-mcard-warnings">⚠ {r.warnings.join(' • ')}</div>
-                    )}
-                    <div className="pss-mcard-actions" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        className="btn btn-outline"
-                        style={{ fontSize: 11, padding: '4px 10px', opacity: r.pick?.status === 'official' ? 0.4 : 1 }}
-                        disabled={r.pick?.status === 'official'}
-                        onClick={() => toggleLean(r)}
-                      >
-                        {r.pick?.status === 'lean' ? '★ Lean' : '☆ Lean'}
-                      </button>
-                      {r.pick?.status === 'official' ? (
-                        <button className="play-badge" onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}>
-                          {r.pick.pick_type === 'total'
-                            ? `${r.pick.side === 'over' ? 'O' : 'U'} ${r.pick.line_played}`
-                            : `${r.pick.side === 'home' ? r.home_team : r.away_team} ${fmtLine(spreadForSide(r.pick.line_played, r.pick.side))}`} {r.pick.units}u
-                        </button>
-                      ) : (
-                        <button className="btn btn-primary" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => { setPickModalDefaultStatus('official'); setPickModalGame(r); }}>+ Play</button>
-                      )}
-                      <button className="btn btn-outline" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => setNoteModalGame(r)}>{r.pick?.note ? '📝 Note' : '+ Note'}</button>
-                    </div>
-                  </div>
-                );
-              });
-            })()}
-          </div>
-        </>
-      )}
 
-      {pickModalGame && (
-        <PickModal
-          game={pickModalGame}
-          existing={pickModalGame.pick}
-          defaultStatus={pickModalDefaultStatus}
-          onClose={() => setPickModalGame(null)}
-          onSaved={refreshAfterPickChange}
-          onDeleted={refreshAfterPickChange}
-        />
-      )}
-      {noteModalGame && (
-        <NoteModal
-          game={noteModalGame}
-          existing={noteModalGame.pick}
-          onClose={() => setNoteModalGame(null)}
-          onSaved={() => { setNoteModalGame(null); loadWeek(); }}
-        />
-      )}
-      {detailGame && <DetailPanel game={detailGame} logos={logos} onClose={() => setDetailGame(null)} />}
+            {displayed.map((r) => (
+              <GameCard
+                key={r.game.id}
+                row={r}
+                rank={pssRankMap[r.game.id]}
+                expanded={expandedIds.has(r.game.id)}
+                onToggle={() => toggle(r.game.id)}
+                logos={logos}
+                plays={picksByGame[r.game.id]}
+                research={researchByGame[r.game.id]}
+                onOpenPickModal={(existing) => setPickModal({ row: r, existing })}
+                onOpenResearchModal={() => setResearchModalRow(r)}
+                onRemoveResearch={(id) => removeResearchPick(r.game.id, id)}
+              />
+            ))}
+            {displayed.length === 0 && <div style={{ ...FM, fontSize: 12, color: C.sub, padding: '20px 0' }}>No games match these filters.</div>}
+          </>
+        )}
 
-      <style jsx>{`
-        .pss-controls { margin-bottom: 16px; display: flex; flex-direction: column; gap: 12px; }
-        .pss-controls-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-        .pss-controls-row label { font-size: 12px; color: #8a92a3; }
-        .pss-quickfilters { display: flex; gap: 6px; flex-wrap: wrap; }
-        .pss-chip-btn { padding: 5px 12px; border-radius: 20px; border: 1px solid #2a3042; background: transparent; color: #8a92a3; font-size: 12px; cursor: pointer; font-family: inherit; }
-        .pss-chip-btn.active { background: #38bd94; color: #0b0e14; border-color: #38bd94; font-weight: 700; }
-        .pss-chip-btn:hover:not(.active) { color: #e6e9ef; border-color: #8a92a3; }
-        .pss-row-bet > td { background: rgba(56,189,148,.06); }
-        .pss-row-bet:hover > td { background: rgba(56,189,148,.12); }
-        .pss-row-consider > td { background: rgba(45,212,191,.05); }
-        .pss-row-review > td { background: rgba(251,146,60,.06); }
-
-        .pss-mobile-only { display: none; }
-        @media (max-width: 900px) {
-          .pss-desktop-only { display: none; }
-          .pss-mobile-only { display: block; }
-        }
-        .pss-mob-toolbar { margin-bottom: 10px; }
-        .pss-mcard { background: #131722; border: 1px solid #1e2535; border-radius: 12px; padding: 14px; margin-bottom: 12px; cursor: pointer; }
-        .pss-mcard-header { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
-        .pss-mcard-rank { font-size: 11px; font-weight: 800; color: #5b6272; }
-        .pss-mcard-teams { flex: 1; display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; }
-        .pss-mcard-teams > div { display: flex; align-items: center; gap: 6px; }
-        .pss-mcard-meta { display: flex; gap: 10px; font-size: 11px; color: #8a92a3; margin-bottom: 10px; }
-        .pss-mcard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; margin-bottom: 8px; }
-        .pss-mcard-grid > div { display: flex; flex-direction: column; gap: 2px; }
-        .pss-mcard-grid span { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: #5b6272; display: flex; align-items: center; }
-        .pss-mcard-grid b { font-size: 13px; font-weight: 700; }
-        .pss-mcard-drivers { font-size: 11px; color: #38bd94; margin-bottom: 4px; }
-        .pss-mcard-warnings { font-size: 11px; color: #fb923c; margin-bottom: 8px; }
-        .pss-mcard-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; padding-top: 8px; border-top: 1px solid #1e2535; }
-      `}</style>
-      <style jsx global>{`
-        .pss-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; overflow-y: auto; padding: 20px 0; }
-        .pss-modal { background: #131722; border: 1px solid #2a3042; border-radius: 12px; padding: 20px; width: 340px; max-width: 90vw; }
-        .pss-modal h3 { margin: 0 0 14px; font-size: 15px; color: #e6e9ef; }
-        .pss-modal textarea { width: 100%; background: #0b0e14; border: 1px solid #2a3042; border-radius: 8px; color: #e6e9ef; padding: 10px; font-size: 13px; resize: vertical; font-family: inherit; }
-        .pss-seg { display: flex; gap: 6px; margin-bottom: 12px; }
-        .pss-seg button { flex: 1; padding: 7px; border-radius: 6px; border: 1px solid #2a3042; background: #0b0e14; color: #8a92a3; cursor: pointer; font-size: 13px; font-family: inherit; }
-        .pss-seg.small button { padding: 5px; font-size: 12px; }
-        .pss-seg button.on { background: #38bd94; color: #0b0e14; border-color: #38bd94; font-weight: 600; }
-        .pss-sidepick { display: flex; gap: 8px; margin-bottom: 14px; }
-        .pss-sidepick button { flex: 1; padding: 10px 6px; border-radius: 8px; border: 1px solid #2a3042; background: #0b0e14; color: #e6e9ef; cursor: pointer; text-align: center; display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; font-family: inherit; }
-        .pss-sidepick button span { font-weight: 400; color: #8a92a3; font-size: 12px; }
-        .pss-sidepick button.on { border-color: #38bd94; background: rgba(56,189,148,0.1); }
-        .pss-sidepick button.on span { color: #38bd94; }
-        .pss-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-        .pss-row label { font-size: 12px; color: #8a92a3; text-transform: uppercase; letter-spacing: 0.04em; }
-        .pss-units { display: flex; gap: 4px; }
-        .pss-units button { width: 28px; height: 28px; border-radius: 6px; border: 1px solid #2a3042; background: #0b0e14; color: #8a92a3; cursor: pointer; font-size: 13px; font-family: inherit; }
-        .pss-units button.on { background: #38bd94; color: #0b0e14; border-color: #38bd94; font-weight: 700; }
-        .pss-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
-        .pss-actions button { padding: 7px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; border: 1px solid #2a3042; font-family: inherit; }
-        .pss-actions .primary { background: #38bd94; color: #0b0e14; border-color: #38bd94; font-weight: 600; }
-        .pss-actions .primary:disabled { opacity: 0.5; cursor: not-allowed; }
-        .pss-actions .ghost { background: transparent; color: #8a92a3; }
-        .pss-actions .danger { background: transparent; color: #f87171; border-color: #f87171; margin-right: auto; }
-        .pss-input { background: #0b0e14; border: 1px solid #2a3042; color: #e6e9ef; padding: 6px 10px; border-radius: 6px; font-size: 13px; font-family: inherit; }
-
-        .pss-detail { background: #131722; border: 1px solid #2a3042; border-radius: 14px; padding: 24px; width: 620px; max-width: 94vw; max-height: 90vh; overflow-y: auto; position: relative; }
-        .pss-detail-close { position: absolute; top: 16px; right: 16px; background: transparent; border: none; color: #8a92a3; font-size: 16px; cursor: pointer; }
-        .pss-detail-matchup { font-size: 18px; font-weight: 800; margin-bottom: 8px; }
-        .pss-detail-badges { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
-        .pss-detail-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 10px; }
-        .pss-detail-stats div { display: flex; flex-direction: column; gap: 2px; }
-        .pss-detail-stats span { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: #5b6272; }
-        .pss-detail-stats b { font-size: 15px; }
-        .pss-detail-explain { font-size: 12px; color: #8a92a3; line-height: 1.5; margin: 8px 0 0; }
-        .pss-detail-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid #1e2535; }
-        .pss-detail-section h4 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #8a92a3; }
-        .pss-detail-empty { font-size: 12px; color: #5b6272; margin: 0; }
-        .pss-detail-record { font-size: 14px; font-weight: 700; margin: 0; }
-        .pss-mini-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-        .pss-mini-table th { text-align: left; padding: 6px 8px; color: #5b6272; font-size: 10px; text-transform: uppercase; border-bottom: 1px solid #1e2535; }
-        .pss-mini-table td { padding: 6px 8px; border-bottom: 1px solid #131722; }
-        .pss-mini-total td { font-weight: 800; color: #38bd94; border-top: 1px solid #2a3042; }
-        .pss-model-stats { display: flex; gap: 16px; margin-top: 8px; font-size: 12px; color: #8a92a3; }
-        .pss-model-stats b { color: #e6e9ef; }
-        .pss-market-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
-        .pss-market-grid div { display: flex; flex-direction: column; gap: 2px; }
-        .pss-market-grid span { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: #5b6272; }
-        .pss-market-grid b { font-size: 13px; }
-        .pss-chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
-        .pss-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
-        .pss-chip-pos { background: rgba(56,189,148,.15); color: #38bd94; }
-        .pss-chip-warn { background: rgba(251,146,60,.15); color: #fb923c; }
-      `}</style>
+        {loading && <div style={{ ...FM, fontSize: 12, color: C.sub, padding: '40px 0', textAlign: 'center' }}>Loading week {week ?? '…'}…</div>}
+      </div>
     </div>
   );
 }
