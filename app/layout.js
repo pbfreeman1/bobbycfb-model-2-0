@@ -3,7 +3,7 @@ import { usePathname } from 'next/navigation';
 import { GLOBAL_STYLE } from '../lib/supabase';
 
 const CFB_NAV = [
-  { href: '/cfb/dashboard', label: '📊 Dashboard' },
+  { href: '/cfb/dashboard', label: '🏈 THE Bobby Model' },
   { href: '/cfb/my-card', label: '🎯 My Card' },
   { href: '/cfb/weekly-board', label: '📋 Weekly Board' },
   { href: '/cfb/pss-dashboard', label: '🧠 PSS Dashboard' },
