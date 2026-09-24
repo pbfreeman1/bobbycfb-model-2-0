@@ -147,6 +147,42 @@ export default function Ingest() {
     finally { setLoading(false); }
   }
 
+  async function runBobbyGrade() {
+    setLoading(true); setStatus(null);
+    addLog(`Grading THE Bobby Model for ${season} Week ${week}…`);
+    try {
+      const res = await fetch(`/api/bobby/grade?season=${season}&week=${week}`, { method: 'POST' });
+      const data = await res.json();
+      if (!data.ok) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
+      else { addLog(`Graded ${data.rows} THE Bobby Model signal(s).`, 'ok'); setStatus('ok'); }
+    } catch (e) { addLog(`Network error: ${e.message}`, 'error'); setStatus('error'); }
+    finally { setLoading(false); }
+  }
+
+  async function runBobbyRecalibrate() {
+    setLoading(true); setStatus(null);
+    addLog(`Recalibrating THE Bobby Model system weights through ${season} Week ${week}…`);
+    try {
+      const res = await fetch(`/api/bobby/recalibrate?season=${season}&week=${week}`, { method: 'POST' });
+      const data = await res.json();
+      if (!data.ok) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
+      else { addLog(`Wrote weights for ${data.rows} system(s), used for Week ${week + 1}.`, 'ok'); setStatus('ok'); }
+    } catch (e) { addLog(`Network error: ${e.message}`, 'error'); setStatus('error'); }
+    finally { setLoading(false); }
+  }
+
+  async function runBobbyCompute() {
+    setLoading(true); setStatus(null);
+    addLog(`Computing THE Bobby Model signals for ${season} Week ${week}…`);
+    try {
+      const res = await fetch(`/api/bobby/compute?season=${season}&week=${week}`, { method: 'POST' });
+      const data = await res.json();
+      if (!data.ok) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
+      else { addLog(`Computed signals for ${data.rows} game(s).`, 'ok'); setStatus('ok'); }
+    } catch (e) { addLog(`Network error: ${e.message}`, 'error'); setStatus('error'); }
+    finally { setLoading(false); }
+  }
+
   return (
     <div className="page">
       <div className="page-header">
@@ -160,6 +196,36 @@ export default function Ingest() {
           <input type="number" value={season} onChange={e => setSeason(+e.target.value)} style={inp} />
           <label style={{ fontSize: 12, color: '#8a92a3' }}>Week</label>
           <input type="number" value={week} onChange={e => setWeek(+e.target.value)} style={{ ...inp, width: 70 }} />
+        </div>
+
+        <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', color: '#5b6272', marginBottom: 10 }}>
+          🏈 THE Bobby Model
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12, marginBottom: 24 }}>
+          <IngestStep
+            number="B1"
+            title="Grade THE Bobby Model"
+            desc="After a week is final, grade every game signal's ATS result and paper units at −110."
+            action="Grade THE Bobby Model"
+            onClick={runBobbyGrade}
+            loading={loading}
+          />
+          <IngestStep
+            number="B2"
+            title="Recalibrate THE Bobby Model"
+            desc="Grade every included system through the selected week and write the weight snapshot used for next week's Compute."
+            action="Recalibrate THE Bobby Model"
+            onClick={runBobbyRecalibrate}
+            loading={loading}
+          />
+          <IngestStep
+            number="B3"
+            title="Compute THE Bobby Model"
+            desc="Score every game in the week against the weight snapshot: consensus, edge, vote share, std dev, conviction, tier, and flags."
+            action="Compute THE Bobby Model"
+            onClick={runBobbyCompute}
+            loading={loading}
+          />
         </div>
 
         <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', color: '#5b6272', marginBottom: 10 }}>
@@ -277,6 +343,12 @@ export default function Ingest() {
           <li>Run Sync Team Logos to fill any missing logos (optional, can be skipped)</li>
           <li>Run Compute Engine (original MSS model) and PSS Compute (BobbyPSSModel) — both read the same games/raw_predictions/model_grades so order doesn't matter</li>
           <li>After games are played, set Week to that completed week, run Grade Results and PSS Grade, then run Recalibrate Models to update the shared Top-7 pool for the following week</li>
+        </ol>
+        <div style={{ fontSize: 14, fontWeight: 700, margin: '18px 0 8px' }}>THE Bobby Model weekly order</div>
+        <ol style={{ color: '#8a92a3', fontSize: 13, lineHeight: 1.8, paddingLeft: 20, margin: 0 }}>
+          <li>With Week = N (just played): CFBD Sync → Grade THE Bobby Model → Recalibrate THE Bobby Model. (Run the MSS/PSS grade steps too if you still use them.)</li>
+          <li>With Week = N + 1: CFBD Sync → Upload Predictions CSV → Compute THE Bobby Model.</li>
+          <li>Re-upload the CSV closer to kickoff when late systems post, then re-run Compute only. Weights do not change mid-week.</li>
         </ol>
       </div>
     </div>
