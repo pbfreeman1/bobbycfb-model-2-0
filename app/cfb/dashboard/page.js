@@ -8,6 +8,9 @@ import {
 } from '../../../lib/bobby-model';
 import { attachBobbyRank } from '../../../lib/bobby-rank';
 import { shortTeam, teamSearchText } from '../../../lib/team-short';
+import {
+  BET_TYPES, validatePick, unitsPL, aggregate, pickDescription, researchDescription, fmtOdds,
+} from '../../../lib/bet-types';
 
 const FH = { fontFamily: "'Space Grotesk', 'Segoe UI', sans-serif" };
 const FM = { fontFamily: "'IBM Plex Mono', 'Courier New', monospace" };
@@ -307,28 +310,139 @@ function LegendModal({ onClose }) {
 // Pick / research modals (writes to user_picks / research_picks — same
 // tables and flows the PSS dashboard uses).
 // ---------------------------------------------------------------------------
+// Modal on desktop, bottom sheet on the phone — same form either way.
+function useIsMobile() {
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const on = () => setMobile(mq.matches);
+    on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
+  return mobile;
+}
+
+function FormShell({ title, onClose, footer, children }) {
+  const mobile = useIsMobile();
+  if (mobile) return <BottomSheet title={title} onClose={onClose} footer={footer}>{children}</BottomSheet>;
+  return (
+    <Modal title={title} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>{children}</div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>{footer}</div>
+    </Modal>
+  );
+}
+
+function FieldLabel({ children }) {
+  return <div style={{ fontSize: 11, color: C.sub, marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.5 }}>{children}</div>;
+}
+
+// Segmented Spread | Total | ML | Custom.
+function BetTypeTabs({ value, onChange }) {
+  return (
+    <div role="tablist" aria-label="Bet type" style={{ display: 'flex', gap: 4, padding: 3, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+      {BET_TYPES.map((t) => {
+        const on = value === t.v;
+        return (
+          <button
+            key={t.v}
+            role="tab"
+            aria-selected={on}
+            onClick={() => onChange(t.v)}
+            style={{
+              flex: 1, minHeight: 44, borderRadius: 6, cursor: 'pointer', ...FM, fontSize: 13,
+              fontWeight: on ? 700 : 400, border: `1px solid ${on ? C.blue : 'transparent'}`,
+              background: on ? `${C.blue}1F` : 'transparent', color: on ? C.blue : C.sub,
+            }}
+          >{t.short}</button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Numeric field that still accepts a leading minus on iOS.
+function NumField({ value, onChange, placeholder, label, id }) {
+  return (
+    <div>
+      <FieldLabel>{label}</FieldLabel>
+      <input
+        id={id}
+        type="text"
+        inputMode="decimal"
+        enterKeyHint="done"
+        autoComplete="off"
+        pattern="-?[0-9]*[.]?[0-9]*"
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value.replace(/[^0-9.+-]/g, ''))}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
+        className="bm-input"
+        style={{ ...FM, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: '0 12px', minHeight: 48, color: C.text, width: '100%', boxSizing: 'border-box' }}
+      />
+    </div>
+  );
+}
+
 function PickModal({ game, signal, existing, onClose, onSaved, onDeleted }) {
+  const mobile = useIsMobile();
+  const existingType = existing ? (existing.is_custom || existing.pick_type === 'custom' ? 'custom' : existing.pick_type) : null;
+  const [pickType, setPickType] = useState(existingType || 'spread');
   const [side, setSide] = useState(existing?.side || signal?.pick_side || null);
   const [line, setLine] = useState(existing?.line_played != null ? String(existing.line_played) : '');
-  const [units, setUnits] = useState(existing?.units || TIER_UNITS[signal?.tier] || 1);
+  const [units, setUnits] = useState(existing?.units ? parseFloat(existing.units) : (TIER_UNITS[signal?.tier] || 1));
+  const [customLabel, setCustomLabel] = useState(existing?.custom_label || '');
+  const [customType, setCustomType] = useState(existing?.custom_type || 'other');
   const [saving, setSaving] = useState(false);
+  const [touched, setTouched] = useState(false);
 
   const vegasLine = game.current_line != null ? parseFloat(game.current_line) : null;
   const homeSpread = vegasLine != null ? parseFloat(teamLine(vegasLine, 'home')) : null;
   const awaySpread = vegasLine != null ? parseFloat(teamLine(vegasLine, 'away')) : null;
+  const ou = game.over_under != null ? parseFloat(game.over_under) : null;
+  const nameFor = (s) => {
+    const full = s === 'home' ? game.home_team : game.away_team;
+    return mobile ? shortTeam(full) : full;
+  };
 
+  // Switching type resets the side to one that is legal for it and refills the
+  // line from the card, except for moneyline, which never prefills a price.
+  function changeType(next) {
+    setPickType(next);
+    setTouched(false);
+    if (next === 'total') {
+      setSide((prev) => (prev === 'over' || prev === 'under' ? prev : 'over'));
+      setLine(ou != null ? String(ou) : '');
+    } else if (next === 'custom') {
+      setSide(null);
+      setLine('');
+    } else {
+      setSide((prev) => (prev === 'home' || prev === 'away' ? prev : signal?.pick_side || 'home'));
+      setLine(next === 'moneyline' ? '' : '');
+    }
+  }
+
+  // Spread prefills from the card when the user picks a team.
   useEffect(() => {
-    if (existing) return;
+    if (existing || pickType !== 'spread') return;
     if (side === 'home' && homeSpread != null) setLine(homeSpread.toFixed(1));
     else if (side === 'away' && awaySpread != null) setLine(awaySpread.toFixed(1));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [side]);
+  }, [side, pickType]);
+
+  const error = validatePick({ pickType, side, line, units, customLabel });
 
   async function handleSave() {
-    if (!side) return;
+    setTouched(true);
+    if (error) return;
     setSaving(true);
     try {
-      await onSaved({ pick_type: 'spread', side, line_played: line.trim() === '' ? null : parseFloat(line), units, is_custom: false });
+      const base = { units, pick_type: pickType };
+      const payload = pickType === 'custom'
+        ? { ...base, side: null, line_played: null, is_custom: true, custom_label: customLabel.trim(), custom_type: customType }
+        : { ...base, side, line_played: line.trim() === '' ? null : parseFloat(line), is_custom: false, custom_label: null, custom_type: null };
+      await onSaved(payload);
     } finally { setSaving(false); }
   }
   async function handleDelete() {
@@ -336,82 +450,201 @@ function PickModal({ game, signal, existing, onClose, onSaved, onDeleted }) {
     try { await onDeleted(); } finally { setSaving(false); }
   }
 
-  const teamBtn = (active) => ({
-    flex: 1, padding: '12px 10px', borderRadius: 8, border: `1px solid ${active ? C.green : C.border}`,
-    background: active ? `${C.green}1F` : C.bg, color: active ? C.green : C.text, cursor: 'pointer', textAlign: 'center', fontSize: 13, fontWeight: active ? 700 : 400,
+  const sideBtn = (active) => ({
+    flex: 1, minHeight: 56, padding: '8px 10px', borderRadius: 8,
+    border: `${active ? 2 : 1}px solid ${active ? C.green : C.border}`,
+    background: active ? `${C.green}1F` : C.bg, color: active ? C.green : C.text,
+    cursor: 'pointer', textAlign: 'center', fontSize: 13, fontWeight: active ? 700 : 400,
   });
   const unitBtn = (active) => ({
-    width: 34, height: 34, borderRadius: 6, border: `1px solid ${active ? C.green : C.border}`,
-    background: active ? C.green : C.bg, color: active ? '#0F1412' : C.sub, cursor: 'pointer', fontSize: 13, fontWeight: active ? 700 : 400,
+    width: 48, height: 48, borderRadius: 8, border: `1px solid ${active ? C.green : C.border}`,
+    background: active ? C.green : C.bg, color: active ? '#0F1412' : C.sub, cursor: 'pointer',
+    fontSize: 15, fontWeight: active ? 700 : 400,
   });
-  const inputStyle = { ...FM, fontSize: 13, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, padding: '8px 10px', color: C.text, width: '100%', boxSizing: 'border-box' };
+  const selStyle = { ...FM, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: '0 12px', minHeight: 48, color: C.text, width: '100%', boxSizing: 'border-box' };
+
+  const footer = (
+    <>
+      {existing && <button onClick={handleDelete} disabled={saving} style={{ minHeight: 48, padding: '0 14px', borderRadius: 8, border: `1px solid ${C.warn}`, background: 'transparent', color: C.warn, cursor: 'pointer', fontSize: 13 }}>Remove</button>}
+      <button onClick={onClose} style={{ flex: 1, minHeight: 48, borderRadius: 8, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+      <button
+        onClick={handleSave}
+        disabled={saving}
+        style={{ flex: 2, minHeight: 48, borderRadius: 8, border: 'none', background: error && touched ? C.border : C.blue, color: error && touched ? C.sub : '#0F1412', cursor: saving ? 'default' : 'pointer', fontSize: 14, fontWeight: 700 }}
+      >{saving ? 'Saving…' : 'Save Bobby Pick'}</button>
+    </>
+  );
 
   return (
-    <Modal title={`${game.away_team} @ ${game.home_team}`} onClose={onClose}>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-        <button style={teamBtn(side === 'away')} onClick={() => setSide('away')}>
-          <div style={{ fontSize: 12, color: C.sub, marginBottom: 3 }}>{game.away_team}</div>
-          <div style={{ fontSize: 17, fontWeight: 700 }}>{fmtSpread(awaySpread)}</div>
-        </button>
-        <button style={teamBtn(side === 'home')} onClick={() => setSide('home')}>
-          <div style={{ fontSize: 12, color: C.sub, marginBottom: 3 }}>{game.home_team}</div>
-          <div style={{ fontSize: 17, fontWeight: 700 }}>{fmtSpread(homeSpread)}</div>
-        </button>
-      </div>
-      <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 11, color: C.sub, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Line you got</div>
-        <input style={inputStyle} type="number" step="0.5" value={line} onChange={(e) => setLine(e.target.value)} placeholder="e.g. -3.5" />
-      </div>
-      <div style={{ marginBottom: 18 }}>
-        <div style={{ fontSize: 11, color: C.sub, marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.5 }}>Units</div>
-        <div style={{ display: 'flex', gap: 6 }}>
-          {[1, 2, 3, 4, 5].map((u) => <button key={u} style={unitBtn(units === u)} onClick={() => setUnits(u)}>{u}</button>)}
+    <FormShell title={`${game.away_team} @ ${game.home_team}`} onClose={onClose} footer={footer}>
+      <BetTypeTabs value={pickType} onChange={changeType} />
+
+      {(pickType === 'spread' || pickType === 'moneyline') && (
+        <div>
+          <FieldLabel>Side</FieldLabel>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {['away', 'home'].map((s) => (
+              <button key={s} style={sideBtn(side === s)} onClick={() => setSide(s)} aria-pressed={side === s} title={s === 'home' ? game.home_team : game.away_team}>
+                <div style={{ fontSize: 12, color: C.sub, marginBottom: 3 }}>{nameFor(s)}</div>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>
+                  {pickType === 'spread' ? fmtSpread(s === 'home' ? homeSpread : awaySpread) : 'ML'}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {pickType === 'total' && (
+        <div>
+          <FieldLabel>Side</FieldLabel>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {['over', 'under'].map((s) => (
+              <button key={s} style={sideBtn(side === s)} onClick={() => setSide(s)} aria-pressed={side === s}>
+                <div style={{ fontSize: 12, color: C.sub, marginBottom: 3 }}>{s === 'over' ? 'Over' : 'Under'}</div>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>{ou != null ? ou : '—'}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {pickType === 'spread' && <NumField id="pick-line" label="Line you got" value={line} onChange={setLine} placeholder="e.g. -3.5" />}
+      {pickType === 'total' && <NumField id="pick-total" label="Total you got" value={line} onChange={setLine} placeholder={ou != null ? String(ou) : 'e.g. 54.5'} />}
+      {pickType === 'moneyline' && <NumField id="pick-odds" label="Odds you got (American)" value={line} onChange={setLine} placeholder="e.g. -150 or +130" />}
+
+      {pickType === 'custom' && (
+        <>
+          <div>
+            <FieldLabel>What did you bet?</FieldLabel>
+            <input
+              value={customLabel}
+              onChange={(e) => setCustomLabel(e.target.value)}
+              placeholder="e.g. 1H Oregon -3.5"
+              className="bm-input"
+              enterKeyHint="done"
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
+              style={selStyle}
+            />
+          </div>
+          <div>
+            <FieldLabel>Kind</FieldLabel>
+            <select value={customType} onChange={(e) => setCustomType(e.target.value)} style={selStyle}>
+              <option value="other">Other</option>
+              <option value="parlay">Parlay</option>
+              <option value="teaser">Teaser</option>
+            </select>
+          </div>
+          <div style={{ ...FM, fontSize: 12, color: C.sub, lineHeight: 1.5 }}>
+            Custom bets are logged but not graded automatically — set the result yourself in My card.
+          </div>
+        </>
+      )}
+
+      <div>
+        <FieldLabel>Units (risk)</FieldLabel>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {[1, 2, 3, 4, 5].map((u) => <button key={u} style={unitBtn(units === u)} onClick={() => setUnits(u)} aria-pressed={units === u}>{u}</button>)}
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        {existing && <button onClick={handleDelete} disabled={saving} style={{ padding: '9px 14px', borderRadius: 8, border: `1px solid ${C.warn}`, background: 'transparent', color: C.warn, cursor: 'pointer', fontSize: 13 }}>Remove</button>}
-        <button onClick={onClose} style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
-        <button onClick={handleSave} disabled={saving || !side} style={{ flex: 2, padding: '9px 0', borderRadius: 8, border: 'none', background: side ? C.blue : C.border, color: side ? '#0F1412' : C.sub, cursor: side && !saving ? 'pointer' : 'default', fontSize: 13, fontWeight: 700 }}>
-          {saving ? 'Saving…' : 'Save Bobby Pick'}
-        </button>
-      </div>
-    </Modal>
+
+      {touched && error && (
+        <div style={{ ...FM, fontSize: 12.5, color: C.warn, background: `${C.warn}14`, border: `1px solid ${C.warn}`, borderRadius: 6, padding: '10px 12px' }}>{error}</div>
+      )}
+    </FormShell>
   );
 }
 
 function ResearchPickModal({ game, onClose, onSaved }) {
+  const mobile = useIsMobile();
+  const [pickType, setPickType] = useState('spread');
   const [pickSide, setPickSide] = useState('home');
   const [source, setSource] = useState('');
+  const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
+  const [touched, setTouched] = useState(false);
 
-  async function handleSave() {
-    setSaving(true);
-    try { await onSaved({ pick_side: pickSide, pick_type: 'spread', source_label: source.trim() || null }); }
-    finally { setSaving(false); }
+  const nameFor = (s) => {
+    const full = s === 'home' ? game.home_team : game.away_team;
+    return mobile ? shortTeam(full) : full;
+  };
+
+  function changeType(next) {
+    setPickType(next);
+    setTouched(false);
+    if (next === 'total') setPickSide((p) => (p === 'over' || p === 'under' ? p : 'over'));
+    else if (next === 'custom') setPickSide(null);
+    else setPickSide((p) => (p === 'home' || p === 'away' ? p : 'home'));
   }
 
-  const selStyle = { ...FM, fontSize: 13, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, padding: '8px 10px', color: C.text, width: '100%', boxSizing: 'border-box' };
+  // research_picks stores no line, units or label, so a custom tag keeps its
+  // free text in the note column.
+  const error = pickType === 'custom'
+    ? (note.trim() ? null : 'Describe the bet.')
+    : (pickSide ? null : 'Pick a side.');
+
+  async function handleSave() {
+    setTouched(true);
+    if (error) return;
+    setSaving(true);
+    try {
+      await onSaved({
+        pick_side: pickType === 'custom' ? null : pickSide,
+        pick_type: pickType,
+        source_label: source.trim() || null,
+        note: note.trim() || null,
+      });
+    } finally { setSaving(false); }
+  }
+
+  const selStyle = { ...FM, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: '0 12px', minHeight: 48, color: C.text, width: '100%', boxSizing: 'border-box' };
+  const sideBtn = (active) => ({
+    flex: 1, minHeight: 48, borderRadius: 8, border: `${active ? 2 : 1}px solid ${active ? C.gold : C.border}`,
+    background: active ? `${C.gold}1F` : C.bg, color: active ? C.gold : C.text, cursor: 'pointer', fontSize: 13, fontWeight: active ? 700 : 400,
+  });
+
+  const footer = (
+    <>
+      <button onClick={onClose} disabled={saving} style={{ flex: 1, minHeight: 48, borderRadius: 8, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+      <button onClick={handleSave} disabled={saving} style={{ flex: 2, minHeight: 48, borderRadius: 8, border: 'none', background: C.gold, color: '#0F1412', cursor: saving ? 'default' : 'pointer', fontSize: 14, fontWeight: 700 }}>
+        {saving ? 'Saving…' : 'Save Tag'}
+      </button>
+    </>
+  );
 
   return (
-    <Modal title={`Research pick — ${game.away_team} @ ${game.home_team}`} onClose={onClose}>
-      <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 11, color: C.sub, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Side</div>
-        <select style={selStyle} value={pickSide} onChange={(e) => setPickSide(e.target.value)}>
-          <option value="home">{game.home_team} (Home)</option>
-          <option value="away">{game.away_team} (Away)</option>
-        </select>
+    <FormShell title={`Research — ${game.away_team} @ ${game.home_team}`} onClose={onClose} footer={footer}>
+      <BetTypeTabs value={pickType} onChange={changeType} />
+
+      {pickType !== 'custom' && (
+        <div>
+          <FieldLabel>Side</FieldLabel>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {(pickType === 'total' ? ['over', 'under'] : ['away', 'home']).map((s) => (
+              <button key={s} style={sideBtn(pickSide === s)} onClick={() => setPickSide(s)} aria-pressed={pickSide === s} title={s === 'home' ? game.home_team : s === 'away' ? game.away_team : undefined}>
+                {s === 'over' ? 'Over' : s === 'under' ? 'Under' : nameFor(s)}{pickType === 'moneyline' ? ' ML' : ''}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {pickType === 'custom' && (
+        <div>
+          <FieldLabel>What is the tag?</FieldLabel>
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Team total over 31.5" className="bm-input" style={selStyle} />
+        </div>
+      )}
+
+      <div>
+        <FieldLabel>Source</FieldLabel>
+        <input style={selStyle} className="bm-input" placeholder="e.g. Action Network" value={source} onChange={(e) => setSource(e.target.value)} />
       </div>
-      <div style={{ marginBottom: 18 }}>
-        <div style={{ fontSize: 11, color: C.sub, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Source</div>
-        <input style={selStyle} placeholder="e.g. Action Network" value={source} onChange={(e) => setSource(e.target.value)} />
-      </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
-        <button onClick={handleSave} disabled={saving} style={{ flex: 2, padding: '9px 0', borderRadius: 8, border: 'none', background: C.gold, color: '#0F1412', cursor: saving ? 'default' : 'pointer', fontSize: 13, fontWeight: 700 }}>
-          {saving ? 'Saving…' : 'Save Tag'}
-        </button>
-      </div>
-    </Modal>
+
+      {touched && error && (
+        <div style={{ ...FM, fontSize: 12.5, color: C.warn, background: `${C.warn}14`, border: `1px solid ${C.warn}`, borderRadius: 6, padding: '10px 12px' }}>{error}</div>
+      )}
+    </FormShell>
   );
 }
 
@@ -565,13 +798,13 @@ function GameCard({
                 {flags.map((f) => <Badge key={f} color={C.warn} filled>{f}</Badge>)}
                 {(research || []).map((r) => (
                   <Badge key={r.id} color={C.sub} className="bm-badge-tap">
-                    {useShort ? shortTeam(r.pick_side === 'home' ? home : away) : (r.pick_side === 'home' ? home : away)}{r.source_label ? ` · ${r.source_label}` : ''}
+                    {researchDescription(r, (sd) => (useShort ? shortTeam(sd === 'home' ? home : away) : (sd === 'home' ? home : away)))}{r.source_label ? ` · ${r.source_label}` : ''}
                     <button onClick={() => onRemoveResearch(r.id)} aria-label="Remove research tag" className="bm-badge-x" style={{ padding: 0, border: 'none', background: 'none', color: C.sub, cursor: 'pointer', fontSize: 14 }}>×</button>
                   </Badge>
                 ))}
                 {(picks || []).map((p) => (
-                  <Badge key={p.id} as="button" onClick={() => onOpenPick(p)} color={C.blue} filled className="bm-badge-tap" title={p.side === 'home' ? home : away}>
-                    MY PLAY · {(parseFloat(p.units) || 1)}u {useShort ? shortTeam(p.side === 'home' ? home : away) : (p.side === 'home' ? home : away)} {teamLine(p.line_played, p.side)}
+                  <Badge key={p.id} as="button" onClick={() => onOpenPick(p)} color={C.blue} filled className="bm-badge-tap" title={p.side === 'home' ? home : p.side === 'away' ? away : (p.custom_label || undefined)}>
+                    MY PLAY · {(parseFloat(p.units) || 1)}u {pickDescription(p, (sd) => (useShort ? shortTeam(sd === 'home' ? home : away) : (sd === 'home' ? home : away)), teamLine)}
                   </Badge>
                 ))}
               </div>
@@ -596,9 +829,11 @@ function GameCard({
                 <span style={{ ...FM, fontSize: 12, color: C.sub, flex: '1 1 auto' }}>Not computed yet</span>
               )}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                {(picks || []).length === 0 && (
-                  <Badge as="button" onClick={() => onOpenPick(null)} color={C.blue} dashed className="bm-badge-tap">+ Bobby Pick</Badge>
-                )}
+                {/* Always available: a game can carry a spread, a total, an ML
+                    and a custom bet at once. */}
+                <Badge as="button" onClick={() => onOpenPick(null)} color={C.blue} dashed className="bm-badge-tap">
+                  {(picks || []).length ? '+ Bet' : '+ Bobby Pick'}
+                </Badge>
                 <Badge as="button" onClick={onOpenResearch} color={C.sub} dashed className="bm-badge-tap">+ Research</Badge>
               </div>
             </div>
@@ -738,18 +973,19 @@ function MyCardModal({ initialTab, season, rows, picksByGame, onClose }) {
           };
         });
 
-        const picks = await sbFetch(`user_picks?select=*,games(home_team,away_team,home_score,away_score)&season=eq.${season}&status=eq.official&is_custom=eq.false&side=not.is.null&order=week.asc`);
+        const picks = await sbFetch(`user_picks?select=*,games(home_team,away_team,home_score,away_score)&season=eq.${season}&status=eq.official&played=eq.true&order=week.asc`);
         const me = picks.map((p) => {
           const g = p.games;
-          const team = p.side === 'home' ? g?.home_team : g?.away_team;
-          const pickTxt = p.pick_type === 'total' ? `${p.side === 'over' ? 'Over' : 'Under'} ${p.line_played ?? ''}` : `${team || ''} ${teamLine(p.line_played, p.side)}`;
+          const pickTxt = pickDescription(p, (sd) => (sd === 'home' ? g?.home_team : g?.away_team), teamLine);
           const u = parseFloat(p.units) || 0;
-          const net = p.result === 'win' ? u : p.result === 'loss' ? -1.1 * u : 0;
+          // Units are risk: a -110 win pays 0.909u, a moneyline win pays its
+          // own price, a loss is the full stake. See lib/bet-types.js.
           return {
-            wk: p.week, u, lock: !!p.is_lock,
+            wk: p.week, u, lock: !!p.is_lock, row: p,
+            betType: p.is_custom || p.pick_type === 'custom' ? 'custom' : (p.pick_type || 'spread'),
             pick: pickTxt, final: g ? `${g.away_team} ${g.home_score != null ? `${g.away_score ?? ''} – ${g.home_score ?? ''}` : ''} ${g.home_team}`.replace(/\s+/g, ' ').trim() : '—',
-            res: p.result === 'push' ? 'P' : p.result === 'win' ? 'W' : p.result === 'loss' ? 'L' : null,
-            unitsPl: net, graded: !!p.result,
+            res: p.result === 'push' ? 'P' : p.result === 'win' ? 'W' : p.result === 'loss' ? 'L' : p.result === 'void' ? 'V' : null,
+            unitsPl: unitsPL(p), graded: !!p.result && p.result !== 'pending',
           };
         });
 
@@ -764,7 +1000,7 @@ function MyCardModal({ initialTab, season, rows, picksByGame, onClose }) {
   const totalUnits = entries.flatMap((e) => e.plays).reduce((s, p) => s + (parseFloat(p.units) || 0), 0);
 
   function agg(list) {
-    const decided = list.filter((x) => x.graded);
+    const decided = list.filter((x) => x.graded && x.res !== 'V');
     const t = tally(decided.map((x) => x.res === 'P' ? 'push' : x.res === 'W' ? 'win' : 'loss'));
     const u = decided.reduce((a, x) => a + x.unitsPl, 0);
     return { rec: recordStr(t), u, ut: fmtU(u) };
@@ -775,6 +1011,18 @@ function MyCardModal({ initialTab, season, rows, picksByGame, onClose }) {
   const meOfficial = seasonData ? seasonData.me : [];
 
   const weeks = seasonData ? Array.from(new Set(seasonData.bm.map((x) => x.wk).concat(seasonData.me.map((x) => x.wk)))).sort((a, b) => a - b) : [];
+
+  // Custom bets never auto-grade, so they get a manual win/loss/push/void.
+  const customPicks = meOfficial.filter((x) => x.betType === 'custom');
+  async function setCustomResult(id, result) {
+    await sbFetch(`user_picks?id=eq.${id}`, { method: 'PATCH', body: JSON.stringify({ result, updated_at: new Date().toISOString() }) });
+    setSeasonData((prev) => prev && ({
+      ...prev,
+      me: prev.me.map((x) => x.row.id === id
+        ? { ...x, row: { ...x.row, result }, res: result === 'push' ? 'P' : result === 'win' ? 'W' : result === 'loss' ? 'L' : result === 'void' ? 'V' : null, unitsPl: unitsPL({ ...x.row, result }), graded: !!result }
+        : x),
+    }));
+  }
 
   const tabBtn = (active) => ({ ...FM, fontSize: 12, background: 'none', border: 'none', minHeight: 40, padding: '0 14px', cursor: 'pointer', borderBottom: `2px solid ${active ? C.gold : 'transparent'}`, color: active ? C.gold : C.sub, fontWeight: active ? 700 : 400 });
 
@@ -799,12 +1047,14 @@ function MyCardModal({ initialTab, season, rows, picksByGame, onClose }) {
                   <span style={{ ...FM, fontSize: 11, color: C.sub }}>{fmtKickoff(r.game.kickoff_at)}{r.game.tv_network ? ` · ${r.game.tv_network}` : ''}</span>
                 </div>
                 {plays.map((p) => {
-                  const agrees = sig && sig.pick_side === p.side;
+                  // Only a spread pick can agree or disagree with the model's side.
+                  const comparable = !p.is_custom && p.pick_type === 'spread' && sig;
+                  const agrees = comparable && sig.pick_side === p.side;
                   return (
-                    <div key={p.id} style={{ ...FM, fontSize: 12.5, display: 'flex', gap: 10 }}>
+                    <div key={p.id} style={{ ...FM, fontSize: 12.5, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                       <span style={{ color: C.green }}>{parseFloat(p.units) || 1}u</span>
-                      <span>{p.side === 'home' ? home : away} {teamLine(p.line_played, p.side)}</span>
-                      <span style={{ color: C.sub }}>· {sig ? `Bobby Model ${sig.tier} · ${agrees ? 'agrees' : 'disagrees'}` : 'no Bobby Model signal'}</span>
+                      <span>{pickDescription(p, (sd) => (sd === 'home' ? home : away), teamLine)}</span>
+                      <span style={{ color: C.sub }}>· {comparable ? `Bobby Model ${sig.tier} · ${agrees ? 'agrees' : 'disagrees'}` : sig ? `Bobby Model ${sig.tier}` : 'no Bobby Model signal'}</span>
                     </div>
                   );
                 })}
@@ -876,19 +1126,61 @@ function MyCardModal({ initialTab, season, rows, picksByGame, onClose }) {
                 })}
               </div>
               <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 6, padding: '12px 14px' }}>
-                <div style={{ ...FM, fontSize: 10, color: C.sub, marginBottom: 4 }}>MY PICKS BY UNIT SIZE</div>
-                {[['1u plays', (x) => x.u === 1], ['2u plays', (x) => x.u === 2], ['Locks', (x) => x.lock]].map(([label, f]) => {
-                  const list = meOfficial.filter(f);
-                  const decided = list.filter((x) => x.graded);
-                  const a = tally(decided.map((x) => x.res === 'P' ? 'push' : x.res === 'W' ? 'win' : 'loss'));
-                  const u = decided.reduce((s, x) => s + x.unitsPl, 0);
+                <div style={{ ...FM, fontSize: 10, color: C.sub, marginBottom: 4 }}>MY PICKS BY BET TYPE</div>
+                {BET_TYPES.map((bt) => {
+                  const list = meOfficial.filter((x) => x.betType === bt.v);
+                  const a = agg(list);
+                  const pending = list.filter((x) => !x.graded).length;
                   return (
-                    <div key={label} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 60px 70px', gap: 8, alignItems: 'center', padding: '6px 0', borderTop: `1px solid ${C.border}`, ...FM, fontSize: 12.5 }}>
-                      <span style={{ color: '#C9CFC8' }}>{label}</span><span>{recordStr(a)}</span><span style={{ color: uColor(u) }}>{fmtU(u)}</span>
+                    <div key={bt.v} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 62px 70px 48px', gap: 8, alignItems: 'center', padding: '6px 0', borderTop: `1px solid ${C.border}`, ...FM, fontSize: 12.5 }}>
+                      <span style={{ color: '#C9CFC8' }}>{bt.label}</span>
+                      <span>{list.length ? a.rec : '—'}</span>
+                      <span style={{ color: uColor(a.u) }}>{list.length ? a.ut : '—'}</span>
+                      <span style={{ color: C.sub, textAlign: 'right' }}>{pending ? `${pending} pend` : ''}</span>
                     </div>
                   );
                 })}
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 62px 70px 48px', gap: 8, alignItems: 'center', padding: '8px 0 2px', borderTop: `1px solid ${C.border}`, ...FM, fontSize: 12.5, fontWeight: 700 }}>
+                  <span>All bets</span>
+                  <span>{agg(meOfficial).rec}</span>
+                  <span style={{ color: uColor(agg(meOfficial).u) }}>{agg(meOfficial).ut}</span>
+                  <span></span>
+                </div>
+                <div style={{ ...FM, fontSize: 11, color: C.sub, marginTop: 8, lineHeight: 1.45 }}>
+                  Units are risk: a −110 win pays 0.91u, a moneyline win pays its price, a loss is the full stake.
+                </div>
               </div>
+
+              {customPicks.length > 0 && (
+                <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 6, padding: '12px 14px', gridColumn: '1 / -1' }}>
+                  <div style={{ ...FM, fontSize: 10, color: C.sub, marginBottom: 4 }}>CUSTOM BETS · SET RESULT BY HAND</div>
+                  {customPicks.map((x) => (
+                    <div key={x.row.id} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '8px 0', borderTop: `1px solid ${C.border}` }}>
+                      <span style={{ ...FM, fontSize: 12.5, flex: '1 1 160px', minWidth: 0 }}>
+                        <span style={{ color: C.sub }}>Wk {x.wk} · {x.u}u </span>{x.pick}
+                      </span>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {[['win', 'W', C.green], ['loss', 'L', C.warn], ['push', 'P', C.sub], ['void', 'V', C.sub]].map(([val, txt, col]) => {
+                          const on = x.row.result === val;
+                          return (
+                            <button
+                              key={val}
+                              onClick={() => setCustomResult(x.row.id, on ? null : val)}
+                              aria-pressed={on}
+                              aria-label={`Mark ${val}`}
+                              style={{
+                                minWidth: 44, minHeight: 44, borderRadius: 6, cursor: 'pointer', ...FM, fontSize: 13, fontWeight: 700,
+                                border: `${on ? 2 : 1}px solid ${on ? col : C.border}`,
+                                background: on ? `${col}1F` : 'transparent', color: on ? col : C.sub,
+                              }}
+                            >{txt}</button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )
@@ -1058,7 +1350,9 @@ export default function BobbyModelDashboard() {
       if (games.length) {
         const ids = games.map((g) => g.id).join(',');
         try {
-          const picks = await sbFetch(`user_picks?select=*&game_id=in.(${ids})&status=eq.official&is_custom=eq.false&side=not.is.null&order=created_at.asc`);
+          // played=true keeps standalone notes (played=false) out while letting
+          // custom bets, which have no side, through.
+          const picks = await sbFetch(`user_picks?select=*&game_id=in.(${ids})&status=eq.official&played=eq.true&order=created_at.asc`);
           const grouped = {};
           for (const p of picks) { if (!grouped[p.game_id]) grouped[p.game_id] = []; grouped[p.game_id].push(p); }
           setPicksByGame(grouped);
