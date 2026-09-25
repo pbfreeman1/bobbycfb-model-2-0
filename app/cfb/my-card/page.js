@@ -1,6 +1,13 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { SUPABASE_URL, SUPABASE_ANON_KEY, sbFetch, sbHeaders, fmt, fmtLine, fmtKickoff, getCurrentWeek } from '../../../lib/supabase';
+import { pickDescription, unitsPL, aggregate } from '../../../lib/bet-types';
+
+// One label for every bet type, shared with the Bobby dashboard.
+function playLabel(pick) {
+  const g = pick.games;
+  return pickDescription(pick, (side) => (side === 'home' ? g?.home_team : g?.away_team));
+}
 
 const SB_HDR = {
   apikey: SUPABASE_ANON_KEY,
@@ -139,17 +146,17 @@ export default function MyCard() {
     if (lockPick) {
       const g = lockPick.games;
       const teamName = lockPick.side === 'home' ? g?.home_team : g?.away_team;
-      text += `🔒 BRLW Lock: ${lockPick.is_custom ? lockPick.custom_label : (teamName + ' ' + fmtLine(lockPick.line_played))}\n`;
+      text += `🔒 BRLW Lock: ${playLabel(lockPick)}\n`;
     }
     text += `\nPicks (${officialPicks.length}):\n`;
     for (const p of officialPicks) {
       if (p.is_lock) continue;
       const g = p.games;
       if (p.is_custom) {
-        text += `• ${p.custom_label} (${p.custom_type})\n`;
+        text += `• ${playLabel(p)} (${p.custom_type})\n`;
       } else {
         const teamName = p.side === 'home' ? g?.home_team : g?.away_team;
-        text += `• ${teamName} ${fmtLine(p.line_played)} — ${g?.away_team} @ ${g?.home_team}\n`;
+        text += `• ${playLabel(p)} — ${g?.away_team} @ ${g?.home_team}\n`;
       }
     }
     text += `\nbobbymodels.app`;
@@ -196,7 +203,7 @@ export default function MyCard() {
       ctx.font = 'bold 13px -apple-system, sans-serif';
       const g = lockPick.games;
       const lockTeam = lockPick.side === 'home' ? g?.home_team : g?.away_team;
-      ctx.fillText(`🔒 BRLW Lock: ${lockPick.is_custom ? lockPick.custom_label : (lockTeam + ' ' + fmtLine(lockPick.line_played))}`, 28, 122);
+      ctx.fillText(`🔒 BRLW Lock: ${playLabel(lockPick)}`, 28, 122);
     }
 
     let y = lockPick ? 158 : 100;
@@ -212,7 +219,7 @@ export default function MyCard() {
 
       ctx.fillStyle = '#e6e9ef';
       ctx.font = 'bold 14px -apple-system, sans-serif';
-      ctx.fillText(p.is_custom ? p.custom_label : `${teamName} ${fmtLine(p.line_played)}`, 28, y + 24);
+      ctx.fillText(playLabel(p), 28, y + 24);
 
       if (!p.is_custom) {
         ctx.fillStyle = '#8a92a3';
@@ -251,6 +258,8 @@ export default function MyCard() {
   const wins = officialPicks.filter(p => p.result === 'win').length;
   const losses = officialPicks.filter(p => p.result === 'loss').length;
   const pushes = officialPicks.filter(p => p.result === 'push').length;
+  // Same units rule as the dashboard: amount to win, risk on a loss.
+  const netUnits = aggregate(officialPicks).units;
 
   const lockWins = lockHistory.filter(p => p.result === 'win').length;
   const lockLosses = lockHistory.filter(p => p.result === 'loss').length;
@@ -292,6 +301,11 @@ export default function MyCard() {
                 <div style={{ fontSize: 13, color: '#8a92a3', marginTop: 2 }}>
                   {officialPicks.length} pick{officialPicks.length !== 1 ? 's' : ''}
                   {(wins + losses + pushes) > 0 && ` · ${wins}–${losses}${pushes > 0 ? `–${pushes}` : ''}`}
+                  {(wins + losses) > 0 && (
+                    <span style={{ color: netUnits > 0 ? '#38bd94' : netUnits < 0 ? '#f87171' : '#8a92a3' }}>
+                      {` · ${netUnits > 0 ? '+' : ''}${netUnits.toFixed(2)}u`}
+                    </span>
+                  )}
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -503,11 +517,12 @@ function PickCard({ pick, onRemove, onToggleLock, onResultChange, saving }) {
       <div style={{ flex: 1, minWidth: 160 }}>
         {pick.is_custom
           ? <>
-            <span style={{ fontWeight: 700, fontSize: 14 }}>{pick.custom_label}</span>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>{playLabel(pick)}</span>
             <span style={{ marginLeft: 8, fontSize: 11, color: '#8a92a3', background: '#232838', padding: '2px 6px', borderRadius: 4 }}>{pick.custom_type}</span>
           </>
           : <>
-            <span style={{ fontWeight: 700, fontSize: 14 }}>{teamName} {fmtLine(pick.line_played)}</span>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>{playLabel(pick)}</span>
+            <span style={{ marginLeft: 6, fontSize: 11, color: '#8a92a3' }}>{parseFloat(pick.units) || 1}u</span>
             {g && (
               <span style={{ marginLeft: 8, fontSize: 12, color: '#8a92a3' }}>
                 {g.away_team} @ {g.home_team}
@@ -522,9 +537,9 @@ function PickCard({ pick, onRemove, onToggleLock, onResultChange, saving }) {
       </div>
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
         {/* Result selector */}
-        {['win', 'loss', 'push'].map(r => (
+        {['win', 'loss', 'push', 'void'].map(r => (
           <button key={r} onClick={() => onResultChange(pick.id, pick.result === r ? null : r, pick._table)} disabled={saving}
-            style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, border: '1px solid', cursor: 'pointer', background: pick.result === r ? (r === 'win' ? '#38bd94' : r === 'loss' ? '#f87171' : '#facc15') : 'transparent', color: pick.result === r ? '#0b0e14' : '#8a92a3', borderColor: pick.result === r ? 'transparent' : '#2a3042', fontWeight: 700 }}>
+            style={{ fontSize: 11, minHeight: 44, minWidth: 44, padding: '4px 10px', borderRadius: 6, border: '1px solid', cursor: 'pointer', background: pick.result === r ? (r === 'win' ? '#38bd94' : r === 'loss' ? '#f87171' : r === 'push' ? '#facc15' : '#8a92a3') : 'transparent', color: pick.result === r ? '#0b0e14' : '#8a92a3', borderColor: pick.result === r ? 'transparent' : '#2a3042', fontWeight: 700 }}>
             {r.toUpperCase()}
           </button>
         ))}

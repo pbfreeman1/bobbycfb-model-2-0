@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { gradeAgainstScore } from '../../../lib/bet-types';
 import { matchKey } from '../../../lib/team-match';
 
 export const runtime = 'nodejs';
@@ -153,28 +154,11 @@ export async function POST(req) {
       const { data: picks } = await supabase.from('user_picks').select('*').eq('game_id', dbGame.id);
       for (const p of picks || []) {
         // Custom picks are logged only; their result is set by hand in My card.
-        if (!p.played || p.is_custom || p.pick_type === 'custom') continue;
-        const linePlayed = p.line_played != null ? parseFloat(p.line_played) : 0;
-        let result;
-        if (p.pick_type === 'moneyline') {
-          // Straight-up winner. line_played holds the American odds, not a
-          // line, so it must never reach the spread math below.
-          result = margin === 0 ? 'push'
-            : (p.side === 'home') === (margin > 0) ? 'win' : 'loss';
-        } else {
-          let atsMargin;
-          if (p.pick_type === 'total') {
-            const total = (g.homePoints || 0) + (g.awayPoints || 0);
-            atsMargin = p.side === 'over' ? total - linePlayed : linePlayed - total;
-          } else {
-            // margin is home - away, and line_played is stored from the picked
-            // team's perspective (away dog = +6.5), so the away side ADDS its
-            // line. This previously subtracted it, which mis-graded every away
-            // spread pick with a non-zero line.
-            atsMargin = p.side === 'home' ? margin - linePlayed : -margin + linePlayed;
-          }
-          result = atsMargin > 0 ? 'win' : atsMargin < 0 ? 'loss' : 'push';
-        }
+        // gradeAgainstScore holds the single rule for every auto-graded type:
+        // moneyline straight up, totals against the number, and spreads as the
+        // picked team's own margin plus its bet-slip line.
+        const result = gradeAgainstScore(p, g.homePoints, g.awayPoints);
+        if (!p.played || result === null) continue;
         await supabase.from('user_picks').update({ result, updated_at: new Date().toISOString() }).eq('id', p.id);
         picksGraded++;
       }

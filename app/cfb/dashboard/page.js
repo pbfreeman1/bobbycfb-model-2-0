@@ -301,7 +301,9 @@ function LegendModal({ onClose }) {
           <span><b style={{ color: C.green }}>Green</b> / <b style={{ color: C.warn }}>orange</b> in breakdowns = with / against the pick</span>
         </div>
       </div>
-      <div style={{ fontSize: 12.5, color: C.sub, marginTop: 14 }}>Units are paper units graded weekly at −110. System weights update after every graded week.</div>
+      <div style={{ fontSize: 12.5, color: C.sub, marginTop: 14 }}>
+        Units are the amount to win: a −110 win pays +1u and a loss costs −1.1u. A moneyline win pays the units and a loss costs what was risked to win them (1u at −150 loses 1.5u; at +130 loses 0.77u). Pushes and voids are 0. Spread lines are shown and stored as they read on a ticket — negative means the picked team is favored. System weights update after every graded week.
+      </div>
     </Modal>
   );
 }
@@ -542,7 +544,7 @@ function PickModal({ game, signal, existing, onClose, onSaved, onDeleted }) {
       )}
 
       <div>
-        <FieldLabel>Units (risk)</FieldLabel>
+        <FieldLabel>Units (to win)</FieldLabel>
         <div style={{ display: 'flex', gap: 8 }}>
           {[1, 2, 3, 4, 5].map((u) => <button key={u} style={unitBtn(units === u)} onClick={() => setUnits(u)} aria-pressed={units === u}>{u}</button>)}
         </div>
@@ -804,7 +806,7 @@ function GameCard({
                 ))}
                 {(picks || []).map((p) => (
                   <Badge key={p.id} as="button" onClick={() => onOpenPick(p)} color={C.blue} filled className="bm-badge-tap" title={p.side === 'home' ? home : p.side === 'away' ? away : (p.custom_label || undefined)}>
-                    MY PLAY · {(parseFloat(p.units) || 1)}u {pickDescription(p, (sd) => (useShort ? shortTeam(sd === 'home' ? home : away) : (sd === 'home' ? home : away)), teamLine)}
+                    MY PLAY · {(parseFloat(p.units) || 1)}u {pickDescription(p, (sd) => (useShort ? shortTeam(sd === 'home' ? home : away) : (sd === 'home' ? home : away)))}
                   </Badge>
                 ))}
               </div>
@@ -976,10 +978,9 @@ function MyCardModal({ initialTab, season, rows, picksByGame, onClose }) {
         const picks = await sbFetch(`user_picks?select=*,games(home_team,away_team,home_score,away_score)&season=eq.${season}&status=eq.official&played=eq.true&order=week.asc`);
         const me = picks.map((p) => {
           const g = p.games;
-          const pickTxt = pickDescription(p, (sd) => (sd === 'home' ? g?.home_team : g?.away_team), teamLine);
+          const pickTxt = pickDescription(p, (sd) => (sd === 'home' ? g?.home_team : g?.away_team));
           const u = parseFloat(p.units) || 0;
-          // Units are risk: a -110 win pays 0.909u, a moneyline win pays its
-          // own price, a loss is the full stake. See lib/bet-types.js.
+          // Units are the amount to win; a loss costs the risk. See lib/bet-types.js.
           return {
             wk: p.week, u, lock: !!p.is_lock, row: p,
             betType: p.is_custom || p.pick_type === 'custom' ? 'custom' : (p.pick_type || 'spread'),
@@ -1053,7 +1054,7 @@ function MyCardModal({ initialTab, season, rows, picksByGame, onClose }) {
                   return (
                     <div key={p.id} style={{ ...FM, fontSize: 12.5, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                       <span style={{ color: C.green }}>{parseFloat(p.units) || 1}u</span>
-                      <span>{pickDescription(p, (sd) => (sd === 'home' ? home : away), teamLine)}</span>
+                      <span>{pickDescription(p, (sd) => (sd === 'home' ? home : away))}</span>
                       <span style={{ color: C.sub }}>· {comparable ? `Bobby Model ${sig.tier} · ${agrees ? 'agrees' : 'disagrees'}` : sig ? `Bobby Model ${sig.tier}` : 'no Bobby Model signal'}</span>
                     </div>
                   );
@@ -1147,7 +1148,7 @@ function MyCardModal({ initialTab, season, rows, picksByGame, onClose }) {
                   <span></span>
                 </div>
                 <div style={{ ...FM, fontSize: 11, color: C.sub, marginTop: 8, lineHeight: 1.45 }}>
-                  Units are risk: a −110 win pays 0.91u, a moneyline win pays its price, a loss is the full stake.
+                  Units are the amount to win: −110 pays +1u and costs −1.1u; a moneyline loss costs what was risked (−150 → −1.5u, +130 → −0.77u).
                 </div>
               </div>
 
