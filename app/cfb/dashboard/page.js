@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { sbFetch, fmtKickoff } from '../../../lib/supabase';
 import {
   TIER_COLOR, TIER_UNITS, fmtSpread, teamLine, nearMiss, tierChecklist,
   DEFINITIONS, TIER_THRESHOLDS_DISPLAY,
 } from '../../../lib/bobby-model';
 import { attachBobbyRank } from '../../../lib/bobby-rank';
+import { shortTeam, teamSearchText } from '../../../lib/team-short';
 
 const FH = { fontFamily: "'Space Grotesk', 'Segoe UI', sans-serif" };
 const FM = { fontFamily: "'IBM Plex Mono', 'Courier New', monospace" };
@@ -42,6 +43,51 @@ function abbrFor(name) {
   const skip = new Set(['of']);
   const letters = words.filter((w) => !skip.has(w.toLowerCase())).map((w) => w[0]).join('');
   return (letters || words[0].slice(0, 4)).slice(0, 4).toUpperCase();
+}
+
+// Decides whether a card can show full team names.
+//
+// The probe element always holds the FULL names on one unwrapped line, so the
+// measurement never depends on what is currently rendered — that is what stops
+// the shorten/fit/lengthen/overflow flip-flop. The box it is compared against
+// is laid out so its width is independent of the text inside it (see
+// .bm-match-row: one nowrap row on desktop, a stretched column on mobile), so
+// switching names can never change the width we measure. One state update per
+// layout, coalesced into a single animation frame.
+function useFullNamesFit(key) {
+  const boxRef = useRef(null);
+  const probeRef = useRef(null);
+  const [fits, setFits] = useState(true);
+
+  const measure = useCallback(() => {
+    const box = boxRef.current, probe = probeRef.current;
+    if (!box || !probe) return;
+    const needed = probe.scrollWidth;
+    const avail = box.clientWidth;
+    if (!needed || !avail) return;
+    setFits((prev) => {
+      const next = needed <= avail + 0.5;
+      return next === prev ? prev : next;
+    });
+  }, []);
+
+  useEffect(() => {
+    measure();
+    let raf = 0;
+    const onResize = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(measure); };
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(onResize) : null;
+    if (ro && boxRef.current) ro.observe(boxRef.current);
+    window.addEventListener('orientationchange', onResize);
+    // Web fonts land after first paint and change every width.
+    if (typeof document !== 'undefined' && document.fonts?.ready) document.fonts.ready.then(measure).catch(() => {});
+    return () => {
+      cancelAnimationFrame(raf);
+      if (ro) ro.disconnect();
+      window.removeEventListener('orientationchange', onResize);
+    };
+  }, [measure, key]);
+
+  return { boxRef, probeRef, fits };
 }
 
 function tally(results) {
@@ -389,11 +435,42 @@ function GameCard({
   const vegasLine = game.current_line != null ? parseFloat(game.current_line) : null;
   const favSide = vegasLine != null && Math.abs(vegasLine) > 0.05 ? (vegasLine > 0 ? 'home' : 'away') : null;
 
+  // Full names unless they demonstrably do not fit on this card.
+  const { boxRef, probeRef, fits } = useFullNamesFit(`${away}@${home}`);
+  const useShort = !fits;
+  const homeDisp = useShort ? shortTeam(home) : home;
+  const awayDisp = useShort ? shortTeam(away) : away;
+  const teamAttrs = (full, disp) => (disp === full ? {} : { title: full, 'aria-label': full });
+
+  // Rendered twice: once visibly, once inside the hidden probe with the full
+  // names and no ellipsis, which is what the fit test measures.
+  const teamPair = (short, isProbe = false) => {
+    const a = short ? shortTeam(away) : away;
+    const h = short ? shortTeam(home) : home;
+    const nameStyle = isProbe
+      ? { fontSize: 15, fontWeight: 600, whiteSpace: 'nowrap' }
+      : { fontSize: 15, fontWeight: 600 };
+    return (
+      <>
+        <TeamMark logoUrl={logos[away]} name={away} />
+        <span className={isProbe ? undefined : 'bm-team'} style={nameStyle} {...(isProbe ? {} : teamAttrs(away, a))}>
+          {a}{favSide === 'away' && <span style={{ color: C.sub, fontWeight: 400 }}> (-{Math.abs(vegasLine).toFixed(1)})</span>}
+        </span>
+        <span style={{ color: C.sub, fontSize: 12, flexShrink: 0 }}>@</span>
+        <TeamMark logoUrl={logos[home]} name={home} />
+        <span className={isProbe ? undefined : 'bm-team'} style={nameStyle} {...(isProbe ? {} : teamAttrs(home, h))}>
+          {h}{favSide === 'home' && <span style={{ color: C.sub, fontWeight: 400 }}> (-{Math.abs(vegasLine).toFixed(1)})</span>}
+        </span>
+      </>
+    );
+  };
+
   const nm = signal ? nearMiss({ ...signal, edge: signal.edge, tier }, config) : null;
   const flags = signal?.flags || [];
   const hasBadges = !!signal || !!nm || flags.length > 0 || (research || []).length > 0 || (picks || []).length > 0;
 
   const pickTeam = signal?.pick_side === 'home' ? home : signal?.pick_side === 'away' ? away : null;
+  const pickTeamDisp = pickTeam && useShort ? shortTeam(pickTeam) : pickTeam;
   const pickAbbr = signal?.pick_side === 'home' ? homeAbbr : awayAbbr;
 
   // Individual system breakdown for this game, sorted by weight desc.
@@ -449,16 +526,25 @@ function GameCard({
       }}>
         <div style={{ display: 'flex', alignItems: 'stretch' }}>
           <div style={{ flexGrow: 1, minWidth: 0 }}>
-            {/* Row 1 — matchup */}
-            <div style={{ padding: '14px 16px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: '1 1 220px' }}>
-                <TeamMark logoUrl={logos[away]} name={away} />
-                <span className="bm-team" style={{ fontSize: 15, fontWeight: 600 }}>{away}{favSide === 'away' && <span style={{ color: C.sub, fontWeight: 400 }}> (-{Math.abs(vegasLine).toFixed(1)})</span>}</span>
-                <span style={{ color: C.sub, fontSize: 12, flexShrink: 0 }}>@</span>
-                <TeamMark logoUrl={logos[home]} name={home} />
-                <span className="bm-team" style={{ fontSize: 15, fontWeight: 600 }}>{home}{favSide === 'home' && <span style={{ color: C.sub, fontWeight: 400 }}> (-{Math.abs(vegasLine).toFixed(1)})</span>}</span>
+            {/* Row 1 — matchup. Full names by default; the card falls back to
+                short names only when the full pair cannot fit. */}
+            <div className="bm-match-row" style={{ padding: '14px 16px 10px' }}>
+              <div ref={boxRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: '1 1 auto' }}>
+                {teamPair(useShort)}
+                {/* Hidden, never-wrapped copy of the full names — the yardstick. */}
+                <div
+                  ref={probeRef}
+                  aria-hidden="true"
+                  style={{
+                    position: 'absolute', top: 0, left: 0, height: 0, overflow: 'hidden', visibility: 'hidden',
+                    pointerEvents: 'none', whiteSpace: 'nowrap', width: 'max-content',
+                    display: 'flex', alignItems: 'center', gap: 8,
+                  }}
+                >
+                  {teamPair(false, true)}
+                </div>
               </div>
-              <div style={{ ...FM, fontSize: 11, color: C.sub, display: 'flex', gap: 10, flexShrink: 0, flexWrap: 'wrap' }}>
+              <div className="bm-match-meta" style={{ ...FM, fontSize: 11, color: C.sub, display: 'flex', gap: 10, flexShrink: 0, flexWrap: 'wrap' }}>
                 <span>{fmtKickoff(game.kickoff_at)}</span>
                 {game.tv_network && <span>{game.tv_network}</span>}
                 <span>O/U {game.over_under != null ? game.over_under : '—'}</span>
@@ -479,13 +565,13 @@ function GameCard({
                 {flags.map((f) => <Badge key={f} color={C.warn} filled>{f}</Badge>)}
                 {(research || []).map((r) => (
                   <Badge key={r.id} color={C.sub} className="bm-badge-tap">
-                    {r.pick_side === 'home' ? home : away}{r.source_label ? ` · ${r.source_label}` : ''}
+                    {useShort ? shortTeam(r.pick_side === 'home' ? home : away) : (r.pick_side === 'home' ? home : away)}{r.source_label ? ` · ${r.source_label}` : ''}
                     <button onClick={() => onRemoveResearch(r.id)} aria-label="Remove research tag" className="bm-badge-x" style={{ padding: 0, border: 'none', background: 'none', color: C.sub, cursor: 'pointer', fontSize: 14 }}>×</button>
                   </Badge>
                 ))}
                 {(picks || []).map((p) => (
-                  <Badge key={p.id} as="button" onClick={() => onOpenPick(p)} color={C.blue} filled className="bm-badge-tap">
-                    MY PLAY · {(parseFloat(p.units) || 1)}u {p.side === 'home' ? home : away} {teamLine(p.line_played, p.side)}
+                  <Badge key={p.id} as="button" onClick={() => onOpenPick(p)} color={C.blue} filled className="bm-badge-tap" title={p.side === 'home' ? home : away}>
+                    MY PLAY · {(parseFloat(p.units) || 1)}u {useShort ? shortTeam(p.side === 'home' ? home : away) : (p.side === 'home' ? home : away)} {teamLine(p.line_played, p.side)}
                   </Badge>
                 ))}
               </div>
@@ -499,7 +585,7 @@ function GameCard({
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0, flex: '1 1 260px' }}>
                   <span style={{ ...FM, fontSize: 14, color: C.text }}>
                     <span style={{ fontSize: 10.5, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>BOBBY PICK: </span>
-                    <span style={{ fontWeight: 700 }}>{pickTeam} {teamLine(signal.vegas_line, signal.pick_side)}</span>
+                    <span className="bm-team" style={{ fontWeight: 700, display: 'inline-block', maxWidth: '100%', verticalAlign: 'bottom' }} {...teamAttrs(pickTeam, pickTeamDisp)}>{pickTeamDisp} {teamLine(signal.vegas_line, signal.pick_side)}</span>
                     <span style={{ color: C.sub }}> (BM Line: <b style={{ color: C.text, fontWeight: 700 }}>{teamLine(signal.consensus, signal.pick_side)}</b>)</span>
                   </span>
                   <span style={{ ...FM, fontSize: 11.5, color: '#C9CFC8' }}>
@@ -1053,7 +1139,10 @@ export default function BobbyModelDashboard() {
       if (minePlusOnly && (picksByGame[r.game.id] || []).length === 0) return false;
       if (teamSearch.trim()) {
         const q = teamSearch.trim().toLowerCase();
-        if (!r.game.home_team.toLowerCase().includes(q) && !r.game.away_team.toLowerCase().includes(q)) return false;
+        // Matches the full name and the short one, so "Jacksonville" still
+        // finds a card that is displaying "Jax State".
+        const hay = `${teamSearchText(r.game.home_team)} ${teamSearchText(r.game.away_team)}`;
+        if (!hay.includes(q)) return false;
       }
       return true;
     });
@@ -1105,6 +1194,9 @@ export default function BobbyModelDashboard() {
         select option { background: ${C.surface}; }
         .bm-page { -webkit-text-size-adjust: 100%; }
         .bm-team { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+        /* Widths here must not depend on the text inside, or the fit test would
+           oscillate: one nowrap row on desktop, a full-width column on mobile. */
+        .bm-match-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: nowrap; }
         .bm-rank { width: 34px; }
         .bm-badge { min-height: 28px; padding: 0 9px; }
         .bm-badge-tap { min-height: 32px; }
@@ -1121,6 +1213,8 @@ export default function BobbyModelDashboard() {
           .bm-badge, .bm-badge-tap { min-height: 44px; padding: 0 10px; font-size: 12px; }
           .bm-badge-x { width: 32px; height: 32px; }
           .bm-info { width: 44px; height: 44px; }
+          .bm-match-row { flex-direction: column; align-items: stretch; gap: 6px; }
+          .bm-match-meta { flex-wrap: wrap; }
           .bm-tier-strip { gap: 6px !important; }
           .bm-tier-strip > button { padding: 8px 6px !important; }
           .bm-tier-count { font-size: 20px !important; }
