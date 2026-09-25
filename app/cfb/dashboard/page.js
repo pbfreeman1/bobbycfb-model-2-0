@@ -6,6 +6,7 @@ import {
   TIER_COLOR, TIER_UNITS, fmtSpread, teamLine, nearMiss, tierChecklist,
   DEFINITIONS, TIER_THRESHOLDS_DISPLAY,
 } from '../../../lib/bobby-model';
+import { attachBobbyRank } from '../../../lib/bobby-rank';
 
 const FH = { fontFamily: "'Space Grotesk', 'Segoe UI', sans-serif" };
 const FM = { fontFamily: "'IBM Plex Mono', 'Courier New', monospace" };
@@ -75,11 +76,29 @@ function TeamMark({ logoUrl, name }) {
   );
 }
 
+// Locks page scroll behind any overlay (modal or bottom sheet). Counted so two
+// overlays open at once can't unlock each other.
+let scrollLocks = 0;
+function useLockBodyScroll(active) {
+  useEffect(() => {
+    if (!active) return undefined;
+    scrollLocks += 1;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      scrollLocks -= 1;
+      if (scrollLocks <= 0) { scrollLocks = 0; document.body.style.overflow = prev || ''; }
+    };
+  }, [active]);
+}
+
 function Modal({ title, onClose, children, wide }) {
+  useLockBodyScroll(true);
   return (
     <div onClick={onClose} style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 200,
-      display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '5vh 16px', overflowY: 'auto',
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 300,
+      display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto',
+      padding: 'calc(5vh + env(safe-area-inset-top)) 16px calc(5vh + env(safe-area-inset-bottom))',
     }}>
       <div onClick={(e) => e.stopPropagation()} style={{
         background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
@@ -101,8 +120,9 @@ function InfoIcon({ defKey, active, onToggle }) {
       type="button"
       onClick={() => onToggle(defKey)}
       aria-label="Explain"
+      className="bm-info"
       style={{
-        width: 20, height: 20, padding: 0, border: 'none', background: 'transparent', cursor: 'pointer',
+        padding: 0, border: 'none', background: 'transparent', cursor: 'pointer',
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
       }}
     >
@@ -138,6 +158,64 @@ function TierBadge({ tier, small }) {
   );
 }
 
+// One badge shape for the whole status row: same height, same padding, same
+// radius, whatever the colour or content. `as` lets an interactive badge render
+// as a button while keeping the identical box.
+function Badge({ color, dashed, filled, children, as = 'span', className = '', ...rest }) {
+  const col = color || C.border;
+  const Tag = as;
+  return (
+    <Tag
+      {...rest}
+      className={`bm-badge ${className}`}
+      style={{
+        ...FM, fontSize: 11, fontWeight: 600, borderRadius: 4, whiteSpace: 'nowrap',
+        border: `1px ${dashed ? 'dashed' : 'solid'} ${col}`,
+        background: filled ? `${col}1A` : 'transparent',
+        color: color || C.sub,
+        display: 'inline-flex', alignItems: 'center', gap: 2,
+        cursor: as === 'button' ? 'pointer' : 'default',
+      }}
+    >{children}</Tag>
+  );
+}
+
+// Slide-up drawer used for the mobile filter panel.
+function BottomSheet({ title, onClose, children, footer }) {
+  useLockBodyScroll(true);
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 250, display: 'flex', alignItems: 'flex-end' }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        style={{
+          width: '100%', maxHeight: '85vh', display: 'flex', flexDirection: 'column',
+          background: C.surface, borderTop: `1px solid ${C.border}`, borderRadius: '14px 14px 0 0',
+          paddingBottom: 'env(safe-area-inset-bottom)',
+        }}
+      >
+        <div style={{ padding: '10px 0 2px', display: 'flex', justifyContent: 'center', flexShrink: 0 }}>
+          <div style={{ width: 40, height: 4, borderRadius: 2, background: C.border }} />
+        </div>
+        <div style={{ padding: '4px 16px 10px', ...FH, fontSize: 16, fontWeight: 700, flexShrink: 0 }}>{title}</div>
+        <div style={{ overflowY: 'auto', padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {children}
+        </div>
+        {footer && (
+          <div style={{ flexShrink: 0, borderTop: `1px solid ${C.border}`, padding: 12, display: 'flex', gap: 10 }}>
+            {footer}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Legend modal
 // ---------------------------------------------------------------------------
@@ -146,7 +224,8 @@ function LegendModal({ onClose }) {
     <Modal title="How to use THE Bobby Model" onClose={onClose} wide>
       <ol style={{ margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 8, fontSize: 14, lineHeight: 1.5, color: '#C9CFC8' }}>
         <li>Each game shows the <b style={{ color: C.text }}>Bobby Model pick</b>: the side where the best-performing 2026 systems agree against the Vegas line, with the model's own line and the edge.</li>
-        <li>Games are binned <b style={{ color: C.text }}>3U, 2U, 1U or Lean</b> and ranked by conviction. Change the order with Sort, or narrow with the tier chips.</li>
+        <li>Games are binned <b style={{ color: C.text }}>3U, 2U, 1U or Lean</b>. Tap the unit cards at the top to filter the board to those tiers — tap again to turn one off.</li>
+        <li><b style={{ color: C.text }}>Bobby Rank (#N)</b> orders the whole week best play to worst: unit tier first, then a strength score from weighted vote share, edge and tightness, with edge tapered past 3 points and ignored past 5 (bigger edges have not held up ATS). It is fixed per game — searching, filtering or re-sorting never changes a game's number.</li>
         <li>Open a card with the arrow for the full breakdown: stats, tier checklist, how the vote splits, every system's prediction and weight, and your notes.</li>
         <li>Log your own play with <b style={{ color: C.blue }}>+ Bobby Pick</b> and tag outside opinions with <b style={{ color: C.text }}>+ Research</b>. Your picks roll into My card.</li>
         <li>Tap any <span style={{ display: 'inline-block', width: 13, height: 13, borderRadius: '50%', border: `1px solid ${C.sub}`, color: C.sub, ...FM, fontSize: 9, lineHeight: '11px', textAlign: 'center' }}>i</span> for a definition.</li>
@@ -167,7 +246,7 @@ function LegendModal({ onClose }) {
         <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 6, padding: 14, display: 'flex', flexDirection: 'column', gap: 7, fontSize: 13, color: '#C9CFC8', lineHeight: 1.45 }}>
           <span style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>COLORS AND CHIPS</span>
           <span><span style={{ display: 'inline-block', width: 10, height: 10, background: C.gold, marginRight: 6 }}></span>Card edge = tier color</span>
-          <span><b style={{ color: C.blue }}>BOBBY PICK</b> = your logged play</span>
+          <span><b style={{ color: C.blue }}>MY PLAY</b> = your logged play · <b style={{ color: C.text }}>Bobby Pick:</b> = the model's side</span>
           <span><b style={{ color: C.sub }}>Grey chips</b> = research tags (side · source)</span>
           <span><b style={{ color: C.warn }}>Orange chip</b> = flag: 6+ edge, fade watch, thin pool, split top</span>
           <span><b style={{ color: C.green }}>Green</b> / <b style={{ color: C.warn }}>orange</b> in breakdowns = with / against the pick</span>
@@ -312,6 +391,7 @@ function GameCard({
 
   const nm = signal ? nearMiss({ ...signal, edge: signal.edge, tier }, config) : null;
   const flags = signal?.flags || [];
+  const hasBadges = !!signal || !!nm || flags.length > 0 || (research || []).length > 0 || (picks || []).length > 0;
 
   const pickTeam = signal?.pick_side === 'home' ? home : signal?.pick_side === 'away' ? away : null;
   const pickAbbr = signal?.pick_side === 'home' ? homeAbbr : awayAbbr;
@@ -361,7 +441,7 @@ function GameCard({
 
   return (
     <div style={{ display: 'flex', alignItems: 'stretch', gap: 8, marginBottom: 12 }} className="bm-card-row">
-      <div style={{ ...FM, fontSize: 12, color: C.sub, width: 30, flexShrink: 0, textAlign: 'right', paddingTop: 16 }}>{rank ? `#${rank}` : '—'}</div>
+      <div className="bm-rank" style={{ ...FM, fontSize: 12, color: C.sub, flexShrink: 0, textAlign: 'right', paddingTop: 16 }} title="Bobby Rank">{rank ? `#${rank}` : '—'}</div>
       <div style={{
         flexGrow: 1, minWidth: 0, background: C.surface, border: `1px solid ${C.border}`,
         borderLeft: `4px solid ${tier === 'No tier' ? C.border : tierColor}`, borderRadius: 6, overflow: 'hidden',
@@ -369,64 +449,71 @@ function GameCard({
       }}>
         <div style={{ display: 'flex', alignItems: 'stretch' }}>
           <div style={{ flexGrow: 1, minWidth: 0 }}>
-            <div style={{ padding: '14px 16px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
+            {/* Row 1 — matchup */}
+            <div style={{ padding: '14px 16px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: '1 1 220px' }}>
                 <TeamMark logoUrl={logos[away]} name={away} />
-                <span style={{ fontSize: 15, fontWeight: 600 }}>{away}{favSide === 'away' && <span style={{ color: C.sub, fontWeight: 400 }}> (-{Math.abs(vegasLine).toFixed(1)})</span>}</span>
-                <span style={{ color: C.sub, fontSize: 12 }}>@</span>
+                <span className="bm-team" style={{ fontSize: 15, fontWeight: 600 }}>{away}{favSide === 'away' && <span style={{ color: C.sub, fontWeight: 400 }}> (-{Math.abs(vegasLine).toFixed(1)})</span>}</span>
+                <span style={{ color: C.sub, fontSize: 12, flexShrink: 0 }}>@</span>
                 <TeamMark logoUrl={logos[home]} name={home} />
-                <span style={{ fontSize: 15, fontWeight: 600 }}>{home}{favSide === 'home' && <span style={{ color: C.sub, fontWeight: 400 }}> (-{Math.abs(vegasLine).toFixed(1)})</span>}</span>
+                <span className="bm-team" style={{ fontSize: 15, fontWeight: 600 }}>{home}{favSide === 'home' && <span style={{ color: C.sub, fontWeight: 400 }}> (-{Math.abs(vegasLine).toFixed(1)})</span>}</span>
               </div>
-              <div style={{ ...FM, fontSize: 11, color: C.sub, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ ...FM, fontSize: 11, color: C.sub, display: 'flex', gap: 10, flexShrink: 0, flexWrap: 'wrap' }}>
                 <span>{fmtKickoff(game.kickoff_at)}</span>
                 {game.tv_network && <span>{game.tv_network}</span>}
                 <span>O/U {game.over_under != null ? game.over_under : '—'}</span>
               </div>
             </div>
 
+            {/* Row 2 — every status badge, on its own row. Skipped entirely when
+                there is nothing to show. */}
+            {hasBadges && (
+              <div style={{ padding: '0 16px 12px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                {signal && <Badge color={tier === 'No tier' ? C.sub : TIER_COLOR[tier]} filled>{tier}</Badge>}
+                {nm && (
+                  <Badge color={C.gold} dashed>
+                    Near miss · {nm}
+                    <InfoIcon defKey="near" active={defKey === 'near'} onToggle={toggleDef} />
+                  </Badge>
+                )}
+                {flags.map((f) => <Badge key={f} color={C.warn} filled>{f}</Badge>)}
+                {(research || []).map((r) => (
+                  <Badge key={r.id} color={C.sub} className="bm-badge-tap">
+                    {r.pick_side === 'home' ? home : away}{r.source_label ? ` · ${r.source_label}` : ''}
+                    <button onClick={() => onRemoveResearch(r.id)} aria-label="Remove research tag" className="bm-badge-x" style={{ padding: 0, border: 'none', background: 'none', color: C.sub, cursor: 'pointer', fontSize: 14 }}>×</button>
+                  </Badge>
+                ))}
+                {(picks || []).map((p) => (
+                  <Badge key={p.id} as="button" onClick={() => onOpenPick(p)} color={C.blue} filled className="bm-badge-tap">
+                    MY PLAY · {(parseFloat(p.units) || 1)}u {p.side === 'home' ? home : away} {teamLine(p.line_played, p.side)}
+                  </Badge>
+                ))}
+              </div>
+            )}
+
             <div style={{ height: 1, background: C.border, margin: '0 16px' }} />
 
-            <div style={{ padding: '10px 16px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                {signal ? (
-                  <>
-                    <span style={{ fontSize: 10.5, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>BOBBY MODEL PICK</span>
-                    <span style={{ ...FM, fontSize: 14, fontWeight: 700, color: C.text }}>{pickTeam} {teamLine(signal.vegas_line, signal.pick_side)}</span>
-                    <TierBadge tier={tier} />
-                    {nm && (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', ...FM, fontSize: 10.5, padding: '0 0 0 8px', borderRadius: 3, border: `1px dashed ${C.gold}`, color: C.gold }}>
-                        Near miss · {nm}
-                        <InfoIcon defKey="near" active={defKey === 'near'} onToggle={toggleDef} />
-                      </span>
-                    )}
-                    <span style={{ ...FM, fontSize: 11.5, color: '#C9CFC8' }}>
-                      Model {pickAbbr} {teamLine(signal.consensus, signal.pick_side)} · <span style={{ color: C.green, fontWeight: 700 }}>Edge +{Math.abs(signal.edge).toFixed(1)}</span> · Vote {Math.round(signal.vote_share * 100)}% · STD {signal.std_dev.toFixed(1)} · Conv {signal.conviction.toFixed(2)}
-                    </span>
-                    {flags.length > 0 && (
-                      <span style={{ ...FM, fontSize: 10.5, padding: '2px 8px', borderRadius: 3, border: `1px solid ${C.warn}`, color: C.warn }}>{flags.join(' · ')}</span>
-                    )}
-                  </>
-                ) : (
-                  <span style={{ ...FM, fontSize: 12, color: C.sub }}>Not computed yet</span>
-                )}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                {(research || []).map((r) => (
-                  <span key={r.id} style={{ ...FM, fontSize: 10.5, padding: '2px 4px 2px 9px', borderRadius: 10, border: `1px solid ${C.border}`, color: C.sub, display: 'flex', alignItems: 'center', gap: 2 }}>
-                    {r.pick_side === 'home' ? home : away}{r.source_label ? ` · ${r.source_label}` : ''}
-                    <button onClick={() => onRemoveResearch(r.id)} aria-label="Remove research tag" style={{ width: 20, height: 20, padding: 0, border: 'none', background: 'none', color: C.sub, cursor: 'pointer', fontSize: 11 }}>×</button>
+            {/* Row 3 — the one consolidated pick line, plus actions */}
+            <div style={{ padding: '12px 16px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              {signal ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0, flex: '1 1 260px' }}>
+                  <span style={{ ...FM, fontSize: 14, color: C.text }}>
+                    <span style={{ fontSize: 10.5, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>BOBBY PICK: </span>
+                    <span style={{ fontWeight: 700 }}>{pickTeam} {teamLine(signal.vegas_line, signal.pick_side)}</span>
+                    <span style={{ color: C.sub }}> (BM Line: <b style={{ color: C.text, fontWeight: 700 }}>{teamLine(signal.consensus, signal.pick_side)}</b>)</span>
                   </span>
-                ))}
-                {(picks || []).length === 0 ? (
-                  <button onClick={() => onOpenPick(null)} style={{ ...FM, fontSize: 10.5, minHeight: 28, padding: '0 10px', borderRadius: 10, border: `1px dashed ${C.blue}`, background: 'transparent', color: C.blue, cursor: 'pointer' }}>+ Bobby Pick</button>
-                ) : (
-                  (picks || []).map((p) => (
-                    <button key={p.id} onClick={() => onOpenPick(p)} style={{ ...FM, fontSize: 10.5, minHeight: 28, padding: '0 10px', borderRadius: 10, border: `1px solid ${C.blue}`, background: `${C.blue}1A`, color: C.blue, cursor: 'pointer' }}>
-                      BOBBY PICK · {(parseFloat(p.units) || 1)}u {p.side === 'home' ? home : away} {teamLine(p.line_played, p.side)}
-                    </button>
-                  ))
+                  <span style={{ ...FM, fontSize: 11.5, color: '#C9CFC8' }}>
+                    <span style={{ color: C.green, fontWeight: 700 }}>Edge +{Math.abs(signal.edge).toFixed(1)}</span> · Vote {Math.round(signal.vote_share * 100)}% · STD {signal.std_dev.toFixed(1)} · Conv {signal.conviction.toFixed(2)}
+                  </span>
+                </div>
+              ) : (
+                <span style={{ ...FM, fontSize: 12, color: C.sub, flex: '1 1 auto' }}>Not computed yet</span>
+              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {(picks || []).length === 0 && (
+                  <Badge as="button" onClick={() => onOpenPick(null)} color={C.blue} dashed className="bm-badge-tap">+ Bobby Pick</Badge>
                 )}
-                <button onClick={onOpenResearch} style={{ ...FM, fontSize: 10.5, minHeight: 28, padding: '0 10px', borderRadius: 10, border: `1px dashed ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer' }}>+ Research</button>
+                <Badge as="button" onClick={onOpenResearch} color={C.sub} dashed className="bm-badge-tap">+ Research</Badge>
               </div>
             </div>
           </div>
@@ -753,14 +840,50 @@ function MyCardModal({ initialTab, season, rows, picksByGame, onClose }) {
 // Top-level page
 // ---------------------------------------------------------------------------
 const SORTS = [
-  { v: 'conv', label: 'Conviction' },
-  { v: 'vs', label: 'Vote share' },
-  { v: 'edge', label: 'Edge' },
-  { v: 'sd', label: 'Std dev (tightest)' },
-  { v: 'tier', label: 'Tier' },
-  { v: 'time', label: 'Game time' },
-  { v: 'team', label: 'Team' },
+  { v: 'rank', label: 'Bobby Rank', short: 'Rank' },
+  { v: 'conv', label: 'Conviction', short: 'Conv' },
+  { v: 'vs', label: 'Vote share', short: 'Vote' },
+  { v: 'edge', label: 'Edge', short: 'Edge' },
+  { v: 'sd', label: 'Std dev (tightest)', short: 'STD' },
+  { v: 'tier', label: 'Tier', short: 'Tier' },
+  { v: 'time', label: 'Game time', short: 'Time' },
+  { v: 'team', label: 'Team', short: 'Team' },
 ];
+
+// Search field: 16px on mobile so iOS doesn't zoom, search keyboard, blurs on
+// Enter/Go so the keyboard drops and the results are visible, own clear button.
+function SearchField({ value, onChange, style }) {
+  return (
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', ...style }}>
+      <input
+        type="text"
+        inputMode="search"
+        enterKeyHint="search"
+        aria-label="Search team"
+        placeholder="Search team…"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
+        className="bm-input"
+        style={{
+          ...FM, width: '100%', minWidth: 0, minHeight: 44, background: C.surface,
+          border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, padding: '0 42px 0 12px',
+        }}
+      />
+      {value !== '' && (
+        <button
+          type="button"
+          onClick={() => onChange('')}
+          aria-label="Clear search"
+          style={{
+            position: 'absolute', right: 2, width: 40, height: 40, border: 'none', background: 'transparent',
+            color: C.sub, cursor: 'pointer', fontSize: 18, lineHeight: 1, borderRadius: 6,
+          }}
+        >×</button>
+      )}
+    </div>
+  );
+}
 
 export default function BobbyModelDashboard() {
   const [season, setSeason] = useState(2026);
@@ -775,11 +898,14 @@ export default function BobbyModelDashboard() {
   const [error, setError] = useState(null);
 
   const [expandedId, setExpandedId] = useState(null);
-  const [tierFilter, setTierFilter] = useState('All');
+  // Unit / Lean summary cards are the tier filter now — multi-select, empty
+  // array means "all games".
+  const [tierSel, setTierSel] = useState([]);
   const [flagsOnly, setFlagsOnly] = useState(false);
   const [minePlusOnly, setMinePlusOnly] = useState(false);
   const [teamSearch, setTeamSearch] = useState('');
-  const [sortBy, setSortBy] = useState('conv');
+  const [sortBy, setSortBy] = useState('rank');
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   const [picksByGame, setPicksByGame] = useState({});
   const [researchByGame, setResearchByGame] = useState({});
@@ -907,6 +1033,12 @@ export default function BobbyModelDashboard() {
     });
   }
 
+  // Bobby Rank is attached here — over every game on the board, before any
+  // search, filter or sort. Each game carries its own rank from this point on.
+  const rankedRows = useMemo(() => attachBobbyRank(rows, config), [rows, config]);
+
+  // Counts are always over the full week so the unit cards never collapse to
+  // zero while a filter is on.
   const counts = useMemo(() => {
     const c = { All: rows.length, '3U': 0, '2U': 0, '1U': 0, Lean: 0, 'No tier': 0 };
     for (const r of rows) { const t = r.signal?.tier || 'No tier'; c[t] = (c[t] || 0) + 1; }
@@ -914,9 +1046,9 @@ export default function BobbyModelDashboard() {
   }, [rows]);
 
   const displayed = useMemo(() => {
-    let list = rows.filter((r) => {
+    let list = rankedRows.filter((r) => {
       const t = r.signal?.tier || 'No tier';
-      if (tierFilter !== 'All' && t !== tierFilter) return false;
+      if (tierSel.length && !tierSel.includes(t)) return false;
       if (flagsOnly && !(r.signal?.flags?.length > 0)) return false;
       if (minePlusOnly && (picksByGame[r.game.id] || []).length === 0) return false;
       if (teamSearch.trim()) {
@@ -927,6 +1059,7 @@ export default function BobbyModelDashboard() {
     });
     const TR = { '3U': 0, '2U': 1, '1U': 2, Lean: 3, 'No tier': 4 };
     const sorters = {
+      rank: (a, b) => a.bobbyRank - b.bobbyRank,
       conv: (a, b) => (b.signal?.conviction ?? -1) - (a.signal?.conviction ?? -1) || (b.signal?.vote_share ?? -1) - (a.signal?.vote_share ?? -1),
       vs: (a, b) => (b.signal?.vote_share ?? -1) - (a.signal?.vote_share ?? -1),
       edge: (a, b) => Math.abs(b.signal?.edge ?? 0) - Math.abs(a.signal?.edge ?? 0),
@@ -935,27 +1068,63 @@ export default function BobbyModelDashboard() {
       time: (a, b) => new Date(a.game.kickoff_at || 0) - new Date(b.game.kickoff_at || 0),
       team: (a, b) => a.game.away_team.localeCompare(b.game.away_team),
     };
-    list = [...list].sort(sorters[sortBy]);
+    list = [...list].sort(sorters[sortBy] || sorters.rank);
     return list;
-  }, [rows, tierFilter, flagsOnly, minePlusOnly, teamSearch, sortBy, picksByGame]);
+  }, [rankedRows, tierSel, flagsOnly, minePlusOnly, teamSearch, sortBy, picksByGame]);
+
+  const toggleTier = (t) => setTierSel((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]);
+
+  // Active filters, surfaced as removable chips under the sticky row.
+  const activeChips = [
+    ...tierSel.map((t) => ({ key: `tier-${t}`, label: t, color: TIER_COLOR[t], clear: () => toggleTier(t) })),
+    ...(flagsOnly ? [{ key: 'flags', label: 'Flags', color: C.warn, clear: () => setFlagsOnly(false) }] : []),
+    ...(minePlusOnly ? [{ key: 'mine', label: 'My picks only', color: C.blue, clear: () => setMinePlusOnly(false) }] : []),
+    ...(teamSearch.trim() ? [{ key: 'search', label: `"${teamSearch.trim()}"`, color: C.gold, clear: () => setTeamSearch('') }] : []),
+  ];
+  const activeCount = activeChips.length;
+  function resetFilters() {
+    setTierSel([]); setFlagsOnly(false); setMinePlusOnly(false); setTeamSearch('');
+  }
 
   const votingCount = Object.keys(weightsByModel).length;
   const myPlaysThisWeek = Object.values(picksByGame).reduce((n, arr) => n + arr.length, 0);
 
   const chipStyle = (active, color) => ({
-    ...FM, fontSize: 12, minHeight: 36, padding: '0 12px', borderRadius: 3, cursor: 'pointer',
+    ...FM, fontSize: 13, minHeight: 44, padding: '0 14px', borderRadius: 6, cursor: 'pointer',
     border: `1px solid ${active ? color : C.border}`, background: active ? `${color}1A` : 'transparent', color: active ? color : C.sub,
   });
+  const selectStyle = {
+    ...FM, minHeight: 44, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6,
+    color: C.text, padding: '0 8px', cursor: 'pointer', maxWidth: '100%',
+  };
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg, padding: '24px 16px', color: C.text }} className="bm-page">
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;700&display=swap');
         select option { background: ${C.surface}; }
-        @media (max-width: 640px) {
-          .bm-tier-strip { grid-template-columns: repeat(4, 1fr) !important; gap: 6px !important; }
-          .bm-tier-strip > div { padding: 8px !important; }
-          .bm-filters { flex-wrap: nowrap !important; overflow-x: auto !important; }
+        .bm-page { -webkit-text-size-adjust: 100%; }
+        .bm-team { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+        .bm-rank { width: 34px; }
+        .bm-badge { min-height: 28px; padding: 0 9px; }
+        .bm-badge-tap { min-height: 32px; }
+        .bm-badge-x { width: 22px; height: 22px; }
+        .bm-info { width: 26px; height: 26px; }
+        .bm-input { font-size: 14px; }
+        .bm-only-mobile { display: none; }
+        @media (max-width: 767px) {
+          .bm-only-mobile { display: flex; }
+          .bm-only-desktop { display: none !important; }
+          /* iOS zooms any field under 16px on focus. */
+          input, select, textarea, .bm-input { font-size: 16px !important; }
+          .bm-rank { width: 26px; }
+          .bm-badge, .bm-badge-tap { min-height: 44px; padding: 0 10px; font-size: 12px; }
+          .bm-badge-x { width: 32px; height: 32px; }
+          .bm-info { width: 44px; height: 44px; }
+          .bm-tier-strip { gap: 6px !important; }
+          .bm-tier-strip > button { padding: 8px 6px !important; }
+          .bm-tier-count { font-size: 20px !important; }
+          .bm-tier-sub { display: none !important; }
           .bm-stat-grid { grid-template-columns: repeat(2, 1fr) !important; }
           .bm-detail-grid { grid-template-columns: 1fr !important; }
         }
@@ -1011,40 +1180,136 @@ export default function BobbyModelDashboard() {
           </div>
         )}
 
-        {/* Tier summary strip */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 12, marginBottom: 16 }} className="bm-tier-strip">
-          {TIER_ORDER.filter((t) => t !== 'No tier').map((t) => (
-            <div key={t} style={{ background: C.surface, border: `1px solid ${C.border}`, borderTop: `3px solid ${TIER_COLOR[t]}`, borderRadius: 6, padding: '12px 16px' }}>
-              <div style={{ color: TIER_COLOR[t], fontWeight: 700, ...FM, fontSize: 12 }}>{t}</div>
-              <div style={{ fontSize: 26, fontWeight: 700 }}>{counts[t] || 0} <span style={{ fontSize: 12, fontWeight: 400, color: C.sub }}>this week</span></div>
-            </div>
-          ))}
+        {/* Unit / Lean summary cards — also the tier filter. Multi-select;
+            none selected means every game. Counts are for the full week. */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 12, marginBottom: 12 }} className="bm-tier-strip">
+          {TIER_ORDER.filter((t) => t !== 'No tier').map((t) => {
+            const on = tierSel.includes(t);
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() => toggleTier(t)}
+                aria-pressed={on}
+                aria-label={`${t} — ${counts[t] || 0} this week${on ? ', filter on' : ''}`}
+                style={{
+                  textAlign: 'left', cursor: 'pointer', minHeight: 44, color: C.text,
+                  background: on ? `${TIER_COLOR[t]}1F` : C.surface,
+                  border: `${on ? 2 : 1}px solid ${on ? TIER_COLOR[t] : C.border}`,
+                  borderTop: `3px solid ${TIER_COLOR[t]}`,
+                  borderRadius: 6, padding: '10px 14px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+                  <span style={{ color: TIER_COLOR[t], fontWeight: 700, ...FM, fontSize: 12 }}>{t}</span>
+                  <span style={{ ...FM, fontSize: 12, fontWeight: 700, color: on ? TIER_COLOR[t] : C.sub }}>{on ? '✓' : '+'}</span>
+                </div>
+                <div className="bm-tier-count" style={{ fontSize: 26, fontWeight: 700 }}>
+                  {counts[t] || 0} <span className="bm-tier-sub" style={{ fontSize: 12, fontWeight: 400, color: C.sub }}>this week</span>
+                </div>
+              </button>
+            );
+          })}
         </div>
 
         {error && <div style={{ ...FM, fontSize: 12, color: C.warn, background: `${C.warn}14`, border: `1px solid ${C.warn}`, borderRadius: 4, padding: '10px 14px', marginBottom: 16 }}>{error}</div>}
 
         {!loading && !error && (
           <>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }} className="bm-filters">
-              {TIER_ORDER.map((t) => (
-                <button key={t} onClick={() => setTierFilter(t)} style={chipStyle(tierFilter === t, t === 'All' ? C.gold : TIER_COLOR[t])}>{t} ({counts[t] || 0})</button>
-              ))}
-              <span style={{ width: 1, height: 22, background: C.border, margin: '0 4px' }} />
+            {/* Desktop filter row */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }} className="bm-only-desktop">
               <button onClick={() => setFlagsOnly((v) => !v)} style={chipStyle(flagsOnly, C.warn)}>Flags</button>
               <button onClick={() => setMinePlusOnly((v) => !v)} style={chipStyle(minePlusOnly, C.blue)}>My picks only</button>
-              <input type="search" placeholder="Search team…" value={teamSearch} onChange={(e) => setTeamSearch(e.target.value)} style={{ ...FM, fontSize: 12, width: 160, minHeight: 36, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, color: C.text, padding: '0 10px' }} />
-              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <SearchField value={teamSearch} onChange={setTeamSearch} style={{ width: 200 }} />
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <label htmlFor="sort" style={{ ...FM, fontSize: 12, color: C.sub }}>Sort</label>
-                <select id="sort" value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={{ ...FM, fontSize: 12, minHeight: 36, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, color: C.text, padding: '0 10px', cursor: 'pointer' }}>
+                <select id="sort" value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={{ ...selectStyle, fontSize: 13, padding: '0 10px' }}>
                   {SORTS.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}
                 </select>
+                <InfoIcon defKey="rank" active={headerTip === 'rank'} onToggle={(k) => setHeaderTip((p) => p === k ? null : k)} />
               </div>
             </div>
 
-            {displayed.map((r, i) => (
+            {/* Mobile: one compact sticky row — search, Filters, sort */}
+            <div
+              className="bm-only-mobile"
+              style={{
+                position: 'sticky', top: 0, zIndex: 60, gap: 8, alignItems: 'center',
+                background: C.bg, margin: '0 -16px', borderBottom: `1px solid ${C.border}`,
+                padding: 'calc(8px + env(safe-area-inset-top)) 16px 8px',
+              }}
+            >
+              <SearchField value={teamSearch} onChange={setTeamSearch} style={{ flex: '1 1 auto', minWidth: 0 }} />
+              <button
+                type="button"
+                onClick={() => setSheetOpen(true)}
+                style={{ ...chipStyle(activeCount > 0, C.gold), flexShrink: 0, whiteSpace: 'nowrap', padding: '0 12px' }}
+              >
+                Filters{activeCount > 0 ? ` · ${activeCount}` : ''}
+              </button>
+              <select
+                aria-label="Sort board"
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                style={{ ...selectStyle, flexShrink: 0, width: 88 }}
+              >
+                {SORTS.map((s) => <option key={s.v} value={s.v}>{s.short}</option>)}
+              </select>
+            </div>
+
+            {/* Active filters, removable without opening the sheet */}
+            {activeCount > 0 && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', padding: '10px 0 2px' }}>
+                {activeChips.map((c) => (
+                  <Badge key={c.key} as="button" onClick={c.clear} color={c.color} filled className="bm-badge-tap" aria-label={`Remove filter ${c.label}`}>
+                    {c.label}<span style={{ marginLeft: 4, fontSize: 14 }}>×</span>
+                  </Badge>
+                ))}
+                <button onClick={resetFilters} style={{ ...FM, fontSize: 12, minHeight: 32, padding: '0 10px', borderRadius: 6, border: 'none', background: 'transparent', color: C.sub, cursor: 'pointer', textDecoration: 'underline' }}>Clear all</button>
+              </div>
+            )}
+
+            {sheetOpen && (
+              <BottomSheet
+                title="Filters"
+                onClose={() => setSheetOpen(false)}
+                footer={(
+                  <>
+                    <button onClick={resetFilters} style={{ flex: 1, ...FM, fontSize: 14, minHeight: 48, borderRadius: 8, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer' }}>Reset</button>
+                    <button onClick={() => setSheetOpen(false)} style={{ flex: 2, ...FM, fontSize: 14, fontWeight: 700, minHeight: 48, borderRadius: 8, border: 'none', background: C.gold, color: '#0F1412', cursor: 'pointer' }}>Done</button>
+                  </>
+                )}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <span style={{ ...FM, fontSize: 11, color: C.sub, letterSpacing: 0.5, textTransform: 'uppercase' }}>Game flags</span>
+                  <button onClick={() => setFlagsOnly((v) => !v)} style={{ ...chipStyle(flagsOnly, C.warn), minHeight: 48, width: '100%', textAlign: 'left' }}>
+                    {flagsOnly ? '✓ ' : ''}Flagged games only
+                  </button>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <span style={{ ...FM, fontSize: 11, color: C.sub, letterSpacing: 0.5, textTransform: 'uppercase' }}>My plays</span>
+                  <button onClick={() => setMinePlusOnly((v) => !v)} style={{ ...chipStyle(minePlusOnly, C.blue), minHeight: 48, width: '100%', textAlign: 'left' }}>
+                    {minePlusOnly ? '✓ ' : ''}Games I have logged a pick on
+                  </button>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <label htmlFor="sheet-sort" style={{ ...FM, fontSize: 11, color: C.sub, letterSpacing: 0.5, textTransform: 'uppercase' }}>Sort by</label>
+                  <select id="sheet-sort" value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={{ ...selectStyle, minHeight: 48, width: '100%', padding: '0 12px' }}>
+                    {SORTS.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}
+                  </select>
+                </div>
+                <div style={{ ...FM, fontSize: 12, color: C.sub, lineHeight: 1.5 }}>
+                  Tiers are filtered with the 3U / 2U / 1U / Lean cards above the board — tap to add, tap again to remove.
+                </div>
+              </BottomSheet>
+            )}
+
+            <div style={{ height: 8 }} />
+
+            {displayed.map((r) => (
               <GameCard
                 key={r.game.id}
-                g={r} rank={i + 1} config={config} logos={logos}
+                g={r} rank={r.bobbyRank} config={config} logos={logos}
                 preds={predsByGame[r.game.id]} weightsByModel={weightsByModel}
                 picks={picksByGame[r.game.id]} research={researchByGame[r.game.id]}
                 expanded={expandedId === r.game.id}
