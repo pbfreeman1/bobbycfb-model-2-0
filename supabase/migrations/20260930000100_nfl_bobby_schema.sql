@@ -295,6 +295,11 @@ create table if not exists nfl_bobby_lines (
 -- One open and one close per game per market; ingest snapshots are unbounded.
 create unique index if not exists nfl_bobby_lines_one_per_phase
   on nfl_bobby_lines (game_id, market, phase) where phase in ('open','close');
+-- Idempotent re-ingest: an archive re-pull derives captured_at from the file
+-- rather than clock time, so replaying it collides here and does nothing
+-- instead of stacking duplicate snapshots.
+create unique index if not exists nfl_bobby_lines_dedupe
+  on nfl_bobby_lines (game_id, market, phase, captured_at);
 create index if not exists nfl_bobby_lines_game
   on nfl_bobby_lines (game_id, market, captured_at desc);
 
@@ -309,7 +314,16 @@ create table if not exists nfl_bobby_picks (
   season         integer not null,
   week           integer not null,
   snapshot_week  integer not null,
+  -- The line this pick was actually scored against: the latest ingest snapshot
+  -- captured strictly before kickoff, falling back to nfl_games when no
+  -- snapshot exists (the 2021-2025 archive, and any first-ever compute).
   line_used      numeric not null,
+  -- Which snapshot that was. Null means the nfl_games fallback was used.
+  line_snapshot_id bigint references nfl_bobby_lines(id) on delete set null,
+  -- Set once the game has kicked off. A locked pick is never rewritten, so a
+  -- Sunday re-pull can refine games that have not started and cannot touch
+  -- one that has.
+  locked_at      timestamptz,
   open_line      numeric,
   consensus      numeric not null,
   eq_consensus   numeric,
@@ -359,7 +373,14 @@ create table if not exists nfl_bobby_pick_grades (
   margin_vs_line  numeric,
   units_pl        numeric not null default 0,
   closing_line    numeric,
+  -- CLV as specified: the scored line vs the close. Under the kickoff-lock
+  -- rule these are usually the SAME snapshot, so this collapses to ~0 by
+  -- construction. Kept for completeness; clv_open is the one that measures
+  -- whether the model's side actually beat the market.
   clv             numeric,
+  -- Opening number to close, on the pick's side. Positive means the side was
+  -- available at a better price when the market opened than when it closed.
+  clv_open        numeric,
   beat_close      boolean,
   graded_at       timestamptz not null default now(),
   unique (pick_id)
@@ -493,6 +514,7 @@ create table if not exists nfl_team_logos (
   created_at timestamptz not null default now()
 );
 
+drop trigger if exists nfl_user_picks_touch on nfl_user_picks;
 create trigger nfl_user_picks_touch before update on nfl_user_picks
   for each row execute function nfl_touch_updated_at();
 
@@ -510,23 +532,24 @@ declare
   v_rows integer;
 begin
   update nfl_games g set
-    is_divisional = (
-      ht.conference is not null and at.conference is not null
-      and ht.conference = at.conference and ht.division = at.division
-    ),
+    -- `awt` not `at`: AT is a keyword (AT TIME ZONE) and fails as an alias.
+    -- is_divisional needs no kickoff time, so it is set unconditionally.
+    is_divisional = (ht.conference = awt.conference and ht.division = awt.division),
     -- Thursday and Monday games, anything kicking at or after 8pm ET, and
     -- Saturday night games. Week 1 Thursday and the late-season Saturday
     -- slate both land correctly. The ESPN sync overwrites this with the real
     -- broadcast window where it has one.
-    is_primetime = (
-      extract(dow from g.game_date at time zone 'America/New_York') in (1, 4)
-      or extract(hour from g.game_date at time zone 'America/New_York') >= 20
-    ),
+    -- game_date is NULL on all 1,424 archive rows, so primetime is left
+    -- untouched rather than silently set to false where kickoff is unknown.
+    is_primetime = case
+      when g.game_date is null then g.is_primetime
+      else (extract(dow from g.game_date at time zone 'America/New_York') in (1, 4)
+            or extract(hour from g.game_date at time zone 'America/New_York') >= 20)
+    end,
     updated_at = now()
-  from nfl_teams ht, nfl_teams at
-  where ht.name = g.home_team and at.name = g.away_team
-    and (p_season is null or g.season = p_season)
-    and g.game_date is not null;
+  from nfl_teams ht, nfl_teams awt
+  where ht.name = g.home_team and awt.name = g.away_team
+    and (p_season is null or g.season = p_season);
   get diagnostics v_rows = row_count;
   return v_rows;
 end $function$;

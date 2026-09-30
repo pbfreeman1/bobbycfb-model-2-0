@@ -281,13 +281,13 @@ begin
   c_sd   := nfl_bobby_cfg(p_market, v_pfx || '_sd');
   c_conv := nfl_bobby_cfg(p_market, v_pfx || '_conv');
 
-  if p_vs   < c_vs   then v_fails := v_fails || 'Vote'; v_miss := c_vs - p_vs;
+  if p_vs   < c_vs   then v_fails := v_fails || 'Vote'::text; v_miss := c_vs - p_vs;
     v_label := 'Vote ' || round((c_vs - p_vs) * 100, 1) || '%'; end if;
-  if v_ae   < c_edge then v_fails := v_fails || 'Edge'; v_miss := c_edge - v_ae;
+  if v_ae   < c_edge then v_fails := v_fails || 'Edge'::text; v_miss := c_edge - v_ae;
     v_label := 'Edge ' || round(c_edge - v_ae, 2); end if;
-  if p_sd   > c_sd   then v_fails := v_fails || 'STD';  v_miss := p_sd - c_sd;
+  if p_sd   > c_sd   then v_fails := v_fails || 'STD'::text;  v_miss := p_sd - c_sd;
     v_label := 'STD ' || round(p_sd - c_sd, 2); end if;
-  if p_conv < c_conv then v_fails := v_fails || 'Conv'; v_miss := c_conv - p_conv;
+  if p_conv < c_conv then v_fails := v_fails || 'Conv'::text; v_miss := c_conv - p_conv;
     v_label := 'Conv ' || round(c_conv - p_conv, 2); end if;
 
   -- Exactly one threshold missed, and the miss is within tolerance of the
@@ -327,27 +327,50 @@ begin
   insert into nfl_bobby_runs (kind, market, season, week, config_version)
     values ('compute', p_market, p_season, p_week, v_ver) returning id into v_run;
 
-  with v as (
-    select gl.game_id gid, gl.line, gl.open_line, rp.predicted_line pl,
+  with
+  -- Kickoff lock, half one: the operative line is the latest ingest snapshot
+  -- captured strictly BEFORE this game's kickoff. A pull taken after kickoff
+  -- can never become the line a pick was scored against.
+  snap as (
+    select distinct on (l.game_id) l.game_id, l.id snap_id, l.line
+      from nfl_bobby_lines l
+      join nfl_games g on g.id = l.game_id
+     where l.market = p_market
+       and l.phase in ('ingest','close')
+       and (g.game_date is null or l.captured_at < g.game_date)
+     order by l.game_id, l.captured_at desc
+  ),
+  gm as (
+    select gl.game_id, gl.game_date, gl.open_line, gl.actual,
+           coalesce(s.line, gl.line) line, s.snap_id
+      from nfl_bobby_game_lines gl
+      left join snap s on s.game_id = gl.game_id
+     where gl.market = p_market and gl.season = p_season and gl.week = p_week
+       and coalesce(s.line, gl.line) is not null
+  ),
+  v as (
+    select gm.game_id gid, gm.line, gm.open_line, rp.predicted_line pl,
            sg.weight wt, sg.rank, sg.wins, sg.losses, sg.pushes,
            sg.model_id, sm.display_name
-      from nfl_bobby_game_lines gl
+      from gm
       join nfl_raw_predictions rp
-        on rp.game_id = gl.game_id and rp.market = gl.market
+        on rp.game_id = gm.game_id and rp.market = p_market
       join nfl_bobby_system_grades sg
         on sg.model_id = rp.model_id and sg.market = p_market
        and sg.season = p_season and sg.week = p_week
       join nfl_source_models sm on sm.id = sg.model_id
-     where gl.market = p_market and gl.season = p_season and gl.week = p_week
-       and gl.line is not null and rp.predicted_line is not null and sg.weight > 0
+     where rp.predicted_line is not null and sg.weight > 0
   ),
   g1 as (
-    select gid, max(line) line, max(open_line) open_line,
-           sum(wt * pl) / sum(wt) cons, sum(wt) sw, count(*) nv
-      from v group by gid
+    select v.gid, max(v.line) line, max(v.open_line) open_line,
+           max(gm.snap_id) snap_id, max(gm.game_date) game_date,
+           count(gm.actual) has_final,
+           sum(v.wt * v.pl) / sum(v.wt) cons, sum(v.wt) sw, count(*) nv
+      from v join gm on gm.game_id = v.gid group by v.gid
   ),
   g2 as (
-    select g1.gid, g1.line, g1.open_line, g1.cons, g1.nv, g1.sw,
+    select g1.gid, g1.line, g1.open_line, g1.snap_id, g1.game_date,
+           g1.has_final, g1.cons, g1.nv, g1.sw,
       g1.cons - g1.line edge,
       -- Weight-weighted, divided by total weight, as in cfb_compute.
       sqrt(sum(v.wt * (v.pl - g1.cons) ^ 2) / g1.sw) sd,
@@ -355,7 +378,8 @@ begin
         where sign(v.pl - g1.line) = sign(g1.cons - g1.line) and g1.cons <> g1.line
       ), 0) / g1.sw vs
     from g1 join v on v.gid = g1.gid
-    group by g1.gid, g1.line, g1.open_line, g1.cons, g1.sw, g1.nv
+    group by g1.gid, g1.line, g1.open_line, g1.snap_id, g1.game_date,
+             g1.has_final, g1.cons, g1.sw, g1.nv
   ),
   top2 as (
     select gid, array_agg(pl - line order by wt desc) d
@@ -363,32 +387,37 @@ begin
      where rn <= 2 group by gid
   ),
   -- Unweighted consensus over every eligible system, weighted or not. Drives
-  -- the Fade watch flag only.
+  -- the Fade watch flag only, and reads the same locked line as the weighted
+  -- consensus so the two compare like with like.
   eq as (
-    select gl.game_id gid, avg(rp.predicted_line) eqc,
-           avg(rp.predicted_line) - max(gl.line) eq_edge
-      from nfl_bobby_game_lines gl
+    select gm.game_id gid, avg(rp.predicted_line) eqc,
+           avg(rp.predicted_line) - max(gm.line) eq_edge
+      from gm
       join nfl_raw_predictions rp
-        on rp.game_id = gl.game_id and rp.market = gl.market
+        on rp.game_id = gm.game_id and rp.market = p_market
       join nfl_source_models sm on sm.id = rp.model_id
-     where gl.market = p_market and gl.season = p_season and gl.week = p_week
-       and gl.line is not null and rp.predicted_line is not null
+     where rp.predicted_line is not null
        and sm.is_active and not sm.is_aggregate
-     group by gl.game_id
+     group by gm.game_id
+  ),
+  -- The weight share has to be windowed BEFORE the jsonb_agg: a window
+  -- function cannot be an argument to an aggregate in the same query level.
+  vw as (
+    select v.*, sum(v.wt) over (partition by v.gid) swg from v
   ),
   pool as (
-    select v.gid, jsonb_agg(jsonb_build_object(
-      'model_id', v.model_id, 'name', v.display_name, 'rank', v.rank,
-      'record', v.wins || '-' || v.losses || case when v.pushes > 0 then '-' || v.pushes else '' end,
-      'weight', round(v.wt, 6),
-      'share', round(v.wt / sum(v.wt) over (partition by v.gid) * 100, 2),
-      'prediction', round(v.pl, 2),
-      'edge', round(v.pl - v.line, 2),
+    select vw.gid, jsonb_agg(jsonb_build_object(
+      'model_id', vw.model_id, 'name', vw.display_name, 'rank', vw.rank,
+      'record', vw.wins || '-' || vw.losses || case when vw.pushes > 0 then '-' || vw.pushes else '' end,
+      'weight', round(vw.wt, 6),
+      'share', round(vw.wt / nullif(vw.swg, 0) * 100, 2),
+      'prediction', round(vw.pl, 2),
+      'edge', round(vw.pl - vw.line, 2),
       'side', case
-        when p_market = 'total' then case when v.pl > v.line then 'over' else 'under' end
-        else case when v.pl > v.line then 'home' else 'away' end end
-    ) order by v.wt desc) pool
-    from v group by v.gid
+        when p_market = 'total' then case when vw.pl > vw.line then 'over' else 'under' end
+        else case when vw.pl > vw.line then 'home' else 'away' end end
+    ) order by vw.wt desc) pool
+    from vw group by vw.gid
   ),
   m as (
     select g2.*, abs(g2.edge) ae,
@@ -413,11 +442,19 @@ begin
     from m
   )
   insert into nfl_bobby_picks
-    (game_id, market, season, week, snapshot_week, line_used, open_line,
+    (game_id, market, season, week, snapshot_week, line_used, line_snapshot_id,
+     locked_at, open_line,
      consensus, eq_consensus, edge, eq_edge, std_dev, agreement, conviction,
      voters, pool_weight, pick_side, tier, units, near_miss, flags,
      keys_crossed, pool, config_version, run_id, computed_at)
-  select gid, p_market, p_season, p_week, p_week, line, open_line,
+  select gid, p_market, p_season, p_week, p_week, line, snap_id,
+    -- Kickoff lock, half two: a game that has already started locks on this
+    -- compute and is never rewritten again. A final score counts as started:
+    -- game_date is NULL on the whole archive, and treating "kickoff unknown"
+    -- as "not yet kicked off" would leave settled historical picks rewritable.
+    case when has_final > 0 or (game_date is not null and game_date <= now())
+         then now() end,
+    open_line,
     cons, eqc, edge, eq_edge, sd, vs, conv, nv, sw,
     case
       when edge = 0 then null
@@ -426,7 +463,7 @@ begin
     end,
     tier,
     case tier when '3U' then 3 when '2U' then 2 when '1U' then 1 else 0 end,
-    nfl_bobby_near_miss(p_market, tier, vs, edge, sd, conv, nv),
+    nfl_bobby_near_miss(p_market, tier, vs, edge, sd, conv, nv::int),
     array_remove(array[
       case when ae >= nfl_bobby_cfg(p_market,'edge_flag') then 'Big edge' end,
       case when nv < nfl_bobby_cfg(p_market,'thin_pool') then 'Thin pool' end,
@@ -446,6 +483,8 @@ begin
   on conflict (game_id, market) do update set
     season = excluded.season, week = excluded.week,
     snapshot_week = excluded.snapshot_week, line_used = excluded.line_used,
+    line_snapshot_id = excluded.line_snapshot_id,
+    locked_at = excluded.locked_at,
     open_line = excluded.open_line, consensus = excluded.consensus,
     eq_consensus = excluded.eq_consensus, edge = excluded.edge,
     eq_edge = excluded.eq_edge, std_dev = excluded.std_dev,
@@ -455,7 +494,10 @@ begin
     near_miss = excluded.near_miss, flags = excluded.flags,
     keys_crossed = excluded.keys_crossed, pool = excluded.pool,
     config_version = excluded.config_version, run_id = excluded.run_id,
-    computed_at = excluded.computed_at;
+    computed_at = excluded.computed_at
+  -- The lock. An already-locked pick is skipped entirely, so a re-pull after
+  -- kickoff cannot revise a game that has started.
+  where nfl_bobby_picks.locked_at is null;
 
   get diagnostics v_rows = row_count;
   update nfl_bobby_runs set rows_written = v_rows, finished_at = now(), ok = true
@@ -491,7 +533,8 @@ begin
      order by l.game_id, (l.phase = 'close') desc, l.captured_at desc
   )
   insert into nfl_bobby_pick_grades
-    (pick_id, result, margin_vs_line, units_pl, closing_line, clv, beat_close, graded_at)
+    (pick_id, result, margin_vs_line, units_pl, closing_line, clv, clv_open,
+     beat_close, graded_at)
   select p.id,
     case when gl.actual = p.line_used then 'push'
          when sign(p.edge) * (gl.actual - p.line_used) > 0 then 'win'
@@ -501,8 +544,14 @@ begin
          when sign(p.edge) * (gl.actual - p.line_used) > 0 then p.units
          else -v_juice * p.units end,
     c.line,
+    -- As specified. Usually ~0: under the kickoff lock, line_used already IS
+    -- the last snapshot before kickoff, so it is generally the same number.
     case when c.line is not null then sign(p.edge) * (c.line - p.line_used) end,
-    case when c.line is not null then sign(p.edge) * (c.line - p.line_used) > 0 end,
+    -- The informative one: the side priced at the open vs at the close.
+    case when c.line is not null and p.open_line is not null
+         then sign(p.edge) * (c.line - p.open_line) end,
+    case when c.line is not null and p.open_line is not null
+         then sign(p.edge) * (c.line - p.open_line) > 0 end,
     now()
   from nfl_bobby_picks p
   join nfl_bobby_game_lines gl on gl.game_id = p.game_id and gl.market = p.market
@@ -512,8 +561,8 @@ begin
   on conflict (pick_id) do update set
     result = excluded.result, margin_vs_line = excluded.margin_vs_line,
     units_pl = excluded.units_pl, closing_line = excluded.closing_line,
-    clv = excluded.clv, beat_close = excluded.beat_close,
-    graded_at = excluded.graded_at;
+    clv = excluded.clv, clv_open = excluded.clv_open,
+    beat_close = excluded.beat_close, graded_at = excluded.graded_at;
 
   get diagnostics v_rows = row_count;
   update nfl_bobby_runs set rows_written = v_rows, finished_at = now(), ok = true
