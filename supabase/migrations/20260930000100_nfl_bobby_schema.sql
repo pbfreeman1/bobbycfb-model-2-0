@@ -227,19 +227,24 @@ create table if not exists nfl_bobby_system_seeds (
   unique (model_id, market, season, through_week)
 );
 
--- Migrate the 50 intentional 2026 Week 1 seed rows out of nfl_model_grades.
--- Verified before writing this: 50 distinct models, games_graded = 16 and
--- wins + losses + pushes = 16 on every row, MAE present on all 50, no
--- ats_pct_l4 and no weight. The originals stay in nfl_model_grades because
--- nfl_pool_as_of and nfl_strong_agreement_plays still read them.
-insert into nfl_bobby_system_seeds
-  (model_id, market, season, through_week, wins, losses, pushes, mae, note)
-select mg.model_id, 'spread', mg.season, mg.week,
-       mg.ats_wins, mg.ats_losses, mg.ats_pushes, mg.mae,
-       'Week 1 2026: per-game predictions unrecoverable, per-system results table loaded instead'
-from nfl_model_grades mg
-where mg.season = 2026 and mg.week = 1 and mg.market = 'spread'
-on conflict (model_id, market, season, through_week) do nothing;
+-- NO SEED ROWS ARE LOADED. The table and the engine's seed handling stay,
+-- because they are the right mechanism if a week's per-game predictions ever
+-- turn out to be unrecoverable — but as of now no week needs one.
+--
+-- The 50 rows in nfl_model_grades stamped 2026 week 1 were loaded on the
+-- premise that Week 1 per-game predictions were gone. data/archive/nfl_spread/
+-- nfl26_ats.csv turns out to carry per-game predictions AND final scores for
+-- 2026 weeks 1-3, so the real per-game data supersedes that summary. Seeding
+-- week 1 here would actively lose information: nfl_recalibrate counts
+-- per-game grades only for weeks AFTER the latest seed, so a week-1 seed
+-- would suppress the 16 real games we now have.
+--
+-- The 50 rows stay in nfl_model_grades untouched; nfl_pool_as_of and
+-- nfl_strong_agreement_plays still read them.
+--
+-- Totals have per-game data for 2026 weeks 1, 2 and 4, with week 3 missing
+-- entirely. That gap needs no seed either — nfl_recalibrate simply grades the
+-- weeks that exist.
 
 -- ---------------------------------------------------------------------------
 -- System grades: what nfl_recalibrate writes. `week` is the as-of week, i.e.
