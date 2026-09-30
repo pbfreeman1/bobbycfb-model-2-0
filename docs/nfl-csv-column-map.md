@@ -160,3 +160,57 @@ stays single.
 Existing spread aliases already in the table and needing no change:
 `linejohns`←`linejohnson`, `linemore`←`linemoore`, `linepz`←`linepfz`,
 `linesagp`←`linesagpred`, `linemed`←`linemedian`.
+
+---
+
+# Resolution log
+
+Every alias and model row actually created, and why. Updated as columns appear.
+
+## 2026-09-30 — tot* mapping completed
+
+The map above was built from `nfltotals26.csv` alone. The 2021–2025 totals files
+carry **28** `tot*` system columns in total, not 22, so five more needed
+resolving. Standing rule applied: a `tot*` column with no unambiguous spread
+counterpart becomes a totals-only model row; only ambiguity between two or more
+existing systems is escalated.
+
+### Aliases added onto existing model rows (25)
+
+First batch, 21: `totmass`→`linemass`, `totbihl`→`linebihl`,
+`totexcel`→`lineexcel`, `totdonchess`→`linedonchess`, `totdokter`→`linedok`,
+`totpve`→`linepve`, `tottalis`→`linetalis`, `totpugh`→`linepugh`,
+`totclean`→`lineclean`, `totround`→`lineround`, `tothanson`→`linehanson`,
+`totffw`→`lineffw`, `totrwp`→`linerwp`, `totsag`→`linesag`,
+`totstjohn`→`linestjohn`, `totbetbetter`→`linebetbetter`, `totashby`→`lineash`,
+`totcurry`→`linecurry`, `totcoffey`→`linecoff`, `totkerns`→`linekerns`,
+`totnewbury`→`linenewbury`.
+
+Second batch, 4, found only in the 2021–2025 files: `totargh`→`lineargh`
+(1,137 rows), `totshark`→`lineshark` (852), `totexcel2`→`lineexcel2` (549),
+`totgrok`→`linegrok` (284). All four are retired spread systems. That is fine:
+priors deliberately ignore `is_active`, so their history still counts.
+
+One `model_id` per system across both markets, which is what
+`nfl_raw_predictions UNIQUE (game_id, model_id, market)` is for. A system's
+spread and totals records grade separately while its identity stays single.
+
+### New totals-only model rows (3)
+
+| model_key | display_name | rows | why not aliased |
+|---|---|---|--:|---|
+| `totpirate` | Pi-Rate (totals) | 1,470 | Three Pi-Rate spread variants exist (`linepi` Ratings, `linepim` Mean, `linepib` Bias) and nothing says which the totals feed matches. Escalated and confirmed. |
+| `totturing` | Turing (totals) | 298 | `lineturner` is "Turner Ratings" — a different name, no established link. |
+| `totwhatif` | What If (totals) | 0 | No spread counterpart at all. Empty in every file held; created so a future publish needs no code change. |
+
+### Correction to the table above
+
+`totbihl`, `totcoffey`, `totkerns` and `totround` are marked DORMANT above.
+That was correct for `nfltotals26.csv` but wrong for the archive as a whole —
+they carry 857, 1,045, 1,140 and 963 rows across 2021–2025. They are simply not
+publishing totals in 2026. Only `totwhatif` is dormant across every file.
+
+### Still unmapped
+
+`linecongrove` — 0 rows everywhere, so there is nothing to correlate against
+`linecong` yet. Stays unmapped by decision.
