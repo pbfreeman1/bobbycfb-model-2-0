@@ -534,7 +534,7 @@ begin
   )
   insert into nfl_bobby_pick_grades
     (pick_id, result, margin_vs_line, units_pl, closing_line, clv, clv_open,
-     beat_close, graded_at)
+     clv_first, beat_close, graded_at)
   select p.id,
     case when gl.actual = p.line_used then 'push'
          when sign(p.edge) * (gl.actual - p.line_used) > 0 then 'win'
@@ -544,12 +544,16 @@ begin
          when sign(p.edge) * (gl.actual - p.line_used) > 0 then p.units
          else -v_juice * p.units end,
     c.line,
-    -- As specified. Usually ~0: under the kickoff lock, line_used already IS
-    -- the last snapshot before kickoff, so it is generally the same number.
+    -- Stored but never displayed: under the kickoff lock line_used already IS
+    -- the last snapshot before kickoff, so this is ~0 by construction.
     case when c.line is not null then sign(p.edge) * (c.line - p.line_used) end,
-    -- The informative one: the side priced at the open vs at the close.
+    -- Open to close, on the pick's side.
     case when c.line is not null and p.open_line is not null
          then sign(p.edge) * (c.line - p.open_line) end,
+    -- First snapshot that produced this side, to close.
+    case when c.line is not null and p.first_line is not null
+         then sign(p.edge) * (c.line - p.first_line) end,
+    -- beat_close tracks the informative measure, not the structural zero.
     case when c.line is not null and p.open_line is not null
          then sign(p.edge) * (c.line - p.open_line) > 0 end,
     now()
@@ -562,6 +566,7 @@ begin
     result = excluded.result, margin_vs_line = excluded.margin_vs_line,
     units_pl = excluded.units_pl, closing_line = excluded.closing_line,
     clv = excluded.clv, clv_open = excluded.clv_open,
+    clv_first = excluded.clv_first,
     beat_close = excluded.beat_close, graded_at = excluded.graded_at;
 
   get diagnostics v_rows = row_count;

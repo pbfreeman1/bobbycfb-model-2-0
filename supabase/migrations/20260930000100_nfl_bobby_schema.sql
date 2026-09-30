@@ -541,10 +541,19 @@ begin
     -- broadcast window where it has one.
     -- game_date is NULL on all 1,424 archive rows, so primetime is left
     -- untouched rather than silently set to false where kickoff is unknown.
+    -- Primetime = kickoff at or after 7:00pm ET, whatever the weekday. That
+    -- captures SNF (8:20), MNF (7:15/8:15), TNF (8:15) and standalone
+    -- Friday/Saturday night games, and excludes the Thanksgiving and Christmas
+    -- AFTERNOON windows (12:30pm / 1:00pm / 4:30pm) that an earlier
+    -- "any Thursday or Monday" rule wrongly flagged on 16 games.
+    --
+    -- Deliberately NOT "standalone slot": Thanksgiving's three games are each
+    -- alone in their window, so that test reintroduces the same bug.
+    --
+    -- Left untouched where kickoff is unknown rather than forced to false.
     is_primetime = case
       when g.game_date is null then g.is_primetime
-      else (extract(dow from g.game_date at time zone 'America/New_York') in (1, 4)
-            or extract(hour from g.game_date at time zone 'America/New_York') >= 20)
+      else extract(hour from g.game_date at time zone 'America/New_York') >= 19
     end,
     updated_at = now()
   from nfl_teams ht, nfl_teams awt

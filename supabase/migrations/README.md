@@ -14,14 +14,18 @@ to be tracked in the repo.
 | 20260930145754 | `nfl_bobby_fix_near_miss_voters_cast` | folded into `…000200` |
 | 20260930145837 | `nfl_bobby_fix_near_miss_array_append` | folded into `…000200` |
 | 20260930150028 | `nfl_bobby_lock_and_classify_null_game_date` | folded into `…000100` and `…000200` |
+| 20260930…  | `nfl_bobby_clv_first_and_backtest_clv_open` | `20260930000300_nfl_bobby_clv_first.sql` |
+| 20260930…  | `nfl_games_add_tv_network` | `20260930000400_nfl_games_tv_network.sql` |
+| 20260930…  | `nfl_espn_staging_transient` + `nfl_espn_staging_drop` | `20260930000500_nfl_espn_staging.sql` |
+| 20260930…  | `nfl_classify_primetime_by_kickoff_hour` | folded into `…000100` |
 
-The three corrective migrations are **not** separate files. Each was a
-`create or replace function`, so the fix is folded back into the file that
-first defined the function and the two files here replay to the same end state
-the live database is in, in one pass. The live history keeps the five steps
-because that is what actually happened.
+Migrations that only did `create or replace function` are **not** separate
+files — the fix is folded back into the file that first defined the function, so
+the files here replay to the same end state the live database is in, in one
+pass. The live history keeps every step because that is what actually happened.
+That covers the three engine fixes below and the primetime rule correction.
 
-### What the three fixes were, and why they were needed
+### What the three engine fixes were, and why they were needed
 
 A `BEGIN … ROLLBACK` dry run of both files passed clean, and both applied
 without error — but **Postgres does not plan the SQL inside a plpgsql function
@@ -41,7 +45,8 @@ after any future engine change; applying cleanly proves very little.
    parsed as an array literal. Fixed with `|| 'Conv'::text`, which selects
    `array || element`. All four branches had it.
 
-3. **`game_date` is NULL on all 1,424 archive rows.** Two consequences:
+3. **`game_date` was NULL on all 1,424 archive rows** (since backfilled from
+   ESPN). Two consequences:
    - `nfl_compute`'s kickoff lock tested `game_date <= now()`, so a NULL
      kickoff read as "not started" and **no archive pick ever locked**,
      leaving settled historical picks rewritable — the exact thing the lock
@@ -71,3 +76,67 @@ after any future engine change; applying cleanly proves very little.
 All of the above ran inside `BEGIN … ROLLBACK`, so no engine output persisted.
 `nfl_bobby_picks`, `_pick_grades`, `_system_grades`, `_lines`, `_runs`,
 `_system_priors` and `_system_seeds` are all empty by design at this point.
+
+
+## Engine smoke test — REQUIRED after any engine change
+
+`supabase/tests/nfl_engine_smoke.sql` must pass after any change to
+`nfl_recalibrate`, `nfl_compute`, `nfl_grade`, `nfl_bobby_near_miss`,
+`nfl_bobby_track_first_snapshot`, or the tables and config they read.
+
+It runs the full round trip on 2025 week 5 inside `BEGIN … ROLLBACK` and
+**asserts** — a failure raises rather than printing something skimmable. It
+covers the kickoff lock (including the "a final score counts as started"
+fallback that the NULL `game_date` archive depends on), the pool-snapshot
+length invariant, the `first_line` trigger, and that a totals compute refuses
+cleanly when no weights exist.
+
+This exists because applying a migration cleanly proves almost nothing here:
+Postgres does not plan SQL inside a plpgsql body until first execution. Three
+real bugs passed both a clean `CREATE` and a clean rollback-wrapped dry run.
+
+## RLS parity with CFB — confirmed
+
+Checked rather than assumed. The CFB tables all use `USING (true)` /
+`WITH CHECK (true)` granted to PUBLIC:
+
+| table | CFB | NFL equivalent |
+|---|---|---|
+| `user_picks` | select, insert, update, delete | `nfl_user_picks` — same four |
+| `research_picks` | select, insert, delete | `nfl_research_picks` — same three |
+| `team_logos` | select only | `nfl_team_logos` — select only |
+
+The NFL policies mirror CFB exactly and are not looser. CFB's `user_picks`
+carries two functionally identical insert policies (`public insert user_picks`
+and `public write user_picks`); the NFL side has one, which is the same
+effective permission.
+
+## Later todo — baseline snapshot of the pre-branch schema
+
+**Not done, deliberately.** `supabase/migrations/` was empty before this
+branch, so everything up to and including `bobby_model_core` (the CFB engine,
+the PSS tables, the original `nfl_*` tables, `nfl_strong_agreement_plays`)
+exists only in the live database's `supabase_migrations.schema_migrations`. A
+fresh environment cannot currently be rebuilt from this repo.
+
+Worth dumping those 29 earlier migrations into files as a baseline so the repo
+is self-sufficient. Left for a separate pass because it touches nothing on this
+branch and would bury the NFL work in a very large diff.
+
+## ESPN backfill results
+
+| season | games | kickoff | network | ESPN id | divisional | primetime (REG) | neutral |
+|---|---|---|---|---|---|---|---|
+| 2021 | 285 | 285 | 285 | 285 | 99 | 56 | 3 |
+| 2022 | 284 | 284 | 284 | 284 | 100 | 55 | 7 |
+| 2023 | 285 | 285 | 285 | 285 | 96 | 58 | 6 |
+| 2024 | 285 | 285 | 285 | 285 | 98 | 59 | 6 |
+| 2025 | 285 | 285 | 285 | 285 | 99 | 60 | 8 |
+| 2026 | 64 | 64 | 64 | 64 | 17 | 13 | 3 |
+
+100% coverage, zero unresolved team names, zero home/away disagreements. 2026 is
+weeks 1-4 only, inserted fresh; 2021-2025 were update-only against the
+predictiontracker spine.
+
+2025 regular-season primetime breaks down as 18 SNF + 21 MNF + 17 TNF + 1 Friday
++ 3 Saturday = 60, every one at or after 7pm ET.
