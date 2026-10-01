@@ -17,13 +17,13 @@ const CFB_NAV = [
   { href: '/cfb/ingest', label: '⚙️ Ingest' },
 ];
 
+// The five-page NFL nav. Dashboard / ATS / O-U / Results are built in a later
+// step; only Ingest exists so far, so those four still 404.
 const NFL_NAV = [
   { href: '/nfl/dashboard', label: '📊 Dashboard' },
-  { href: '/nfl/pss', label: '🧠 PSS' },
-  { href: '/nfl/strong-agreement', label: '🔥 Strong Agreement' },
+  { href: '/nfl/ats', label: '🏈 ATS' },
+  { href: '/nfl/totals', label: '🎯 O/U' },
   { href: '/nfl/results', label: '📅 Results' },
-  { href: '/nfl/bobby-results', label: '🏈 Bobby Results' },
-  { href: '/nfl/research', label: '🔍 Research' },
   { href: '/nfl/ingest', label: '⚙️ Ingest' },
 ];
 
