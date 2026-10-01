@@ -69,6 +69,12 @@ function useResults(season, market) {
   return state;
 }
 
+// nfl_grade stores result as 'win' | 'loss' | 'push'. Normalised here rather
+// than compared inline, so a stray casing or an added value shows up as
+// unknown instead of silently counting as a loss.
+const RESULT = { win: 'W', loss: 'L', push: 'P' };
+const norm = (r) => RESULT[String(r || '').toLowerCase()] || null;
+
 // One row per week, plus a season total. Pushes are excluded from the win
 // percentage denominator, which is the standard ATS convention.
 function summarise(picks, grades, games) {
@@ -94,9 +100,10 @@ function summarise(picks, grades, games) {
       continue;
     }
     row.graded++;
-    if (g.result === 'W') row.w++;
-    else if (g.result === 'L') row.l++;
-    else if (g.result === 'P') row.p++;
+    const res = norm(g.result);
+    if (res === 'W') row.w++;
+    else if (res === 'L') row.l++;
+    else if (res === 'P') row.p++;
     if (g.units_pl != null) row.units += parseFloat(g.units_pl);
     if (g.clv != null) { row.clvSum += parseFloat(g.clv); row.clvN++; }
     if (g.beat_close) row.beatClose++;
@@ -271,7 +278,7 @@ function WeekTable({ weeks, total, openWeek, setOpenWeek }) {
   );
 }
 
-const RESULT_COLOR = { W: C.green, L: C.warn, P: C.sub };
+const RESULT_COLOR = { W: C.green, L: C.warn, P: C.sub, null: C.sub };
 const PCOLS = 'minmax(0,1fr) 150px 54px 62px 64px 66px';
 
 function PickTable({ week, market, picks, games, grades }) {
@@ -313,8 +320,8 @@ function PickTable({ week, market, picks, games, grades }) {
               <span style={{ color: tierColor, fontWeight: 700 }}>
                 {pick.tier === 'No tier' ? '—' : pick.tier}
               </span>
-              <span style={{ color: g ? RESULT_COLOR[g.result] || C.sub : C.sub, fontWeight: 700 }}>
-                {g ? g.result : game?.completed ? 'ungraded' : 'pending'}
+              <span style={{ color: g ? RESULT_COLOR[norm(g.result)] || C.sub : C.sub, fontWeight: 700 }}>
+                {g ? (norm(g.result) || g.result || '?') : game?.completed ? 'ungraded' : 'pending'}
               </span>
               <span style={{ color: g && g.units_pl != null ? unitColor(parseFloat(g.units_pl)) : C.sub }}>
                 {g && g.units_pl != null ? signed(g.units_pl) : '—'}
