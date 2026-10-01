@@ -3,6 +3,7 @@ import {
   parseCsv, detectMarket, buildColumnResolver, extractGames, validateAgainstSchedule,
 } from '../../../../lib/nfl-csv';
 import { buildTeamNameResolver } from '../../../../lib/espn';
+import { guard } from '../../../../lib/admin-auth';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -29,6 +30,11 @@ export const maxDuration = 300;
 // all, nothing is written and the mismatches are returned. Loading this week's
 // numbers onto last week's games would corrupt both weeks silently.
 export async function POST(req) {
+  // Admin gate. Also enforced by middleware.js; repeated here so the
+  // route stays closed if the matcher is ever narrowed.
+  const denied = await guard(req);
+  if (denied) return denied;
+
   const { searchParams } = new URL(req.url);
   const season = parseInt(searchParams.get('season') || '', 10);
   const week = parseInt(searchParams.get('week') || '', 10);

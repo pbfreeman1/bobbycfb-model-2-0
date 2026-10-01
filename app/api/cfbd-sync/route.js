@@ -1,9 +1,25 @@
 import { createClient } from '@supabase/supabase-js';
 import { matchKey } from '../../../lib/team-match';
+import { guard } from '../../../lib/admin-auth';
 
 export const runtime = 'nodejs';
 
-export async function GET(req) {
+// POST, not GET: this route updates and inserts into `games`. On GET a browser
+// visit, a link prefetch, a crawler or an <img src> would have written to
+// production data.
+export async function GET() {
+  return Response.json(
+    { error: 'Use POST. This route writes, so it is not reachable by GET.' },
+    { status: 405, headers: { Allow: 'POST' } }
+  );
+}
+
+export async function POST(req) {
+  // Admin gate. Also enforced by middleware.js; repeated here so the
+  // route stays closed if the matcher is ever narrowed.
+  const denied = await guard(req);
+  if (denied) return denied;
+
   const { searchParams } = new URL(req.url);
   const season = searchParams.get('season') || '2026';
   const week = searchParams.get('week') || '1';

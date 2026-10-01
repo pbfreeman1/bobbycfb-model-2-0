@@ -39,7 +39,7 @@ export default function Ingest() {
     setLoading(true); setStatus(null);
     addLog(`Starting CFBD sync for ${season} Week ${week}…`);
     try {
-      const res = await fetch(`/api/cfbd-sync?season=${season}&week=${week}`);
+      const res = await fetch(`/api/cfbd-sync?season=${season}&week=${week}`, { method: 'POST' });
       const data = await res.json();
       if (data.error) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
       else {
@@ -55,7 +55,7 @@ export default function Ingest() {
     setLoading(true); setStatus(null);
     addLog(`Syncing team logos for ${season} from CFBD…`);
     try {
-      const res = await fetch(`/api/team-logos-sync?season=${season}`);
+      const res = await fetch(`/api/team-logos-sync?season=${season}`, { method: 'POST' });
       const data = await res.json();
       if (data.error) { addLog(`Error: ${data.error}`, 'error'); setStatus('error'); }
       else {

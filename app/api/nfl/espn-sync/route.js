@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import {
   seasonSlates, buildTeamResolver, fetchNormalizedSlate, THROTTLE_MS, sleep,
 } from '../../../../lib/espn';
+import { guard } from '../../../../lib/admin-auth';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -24,6 +25,11 @@ export const maxDuration = 300;
 // `from_week` makes the backfill resumable: a run that times out can be
 // restarted where it stopped rather than re-walking the season.
 export async function POST(req) {
+  // Admin gate. Also enforced by middleware.js; repeated here so the
+  // route stays closed if the matcher is ever narrowed.
+  const denied = await guard(req);
+  if (denied) return denied;
+
   const { searchParams } = new URL(req.url);
   const season = parseInt(searchParams.get('season') || '', 10);
   const weekParam = searchParams.get('week');

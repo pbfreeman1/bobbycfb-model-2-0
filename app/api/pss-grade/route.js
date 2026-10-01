@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { matchKey } from '../../../lib/team-match';
+import { guard } from '../../../lib/admin-auth';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -9,6 +10,11 @@ export const maxDuration = 60;
 // writes only to pss_pick_grades / pss_user_picks / games (score fields are
 // shared and idempotent to update from either pipeline).
 export async function POST(req) {
+  // Admin gate. Also enforced by middleware.js; repeated here so the
+  // route stays closed if the matcher is ever narrowed.
+  const denied = await guard(req);
+  if (denied) return denied;
+
   const { searchParams } = new URL(req.url);
   const season = parseInt(searchParams.get('season') || '2026');
   const week = parseInt(searchParams.get('week') || '1');

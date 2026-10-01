@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { TOP_POOL_SIZE, runDynamicTopK, scorePSS } from '../../../lib/pss-engine';
+import { guard } from '../../../lib/admin-auth';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -9,6 +10,11 @@ export const maxDuration = 60;
 // the Dynamic Top-K cascade (3 -> 5 -> 7) and Play Strength Score on top of
 // it. Writes only to pss_game_metrics — never touches game_metrics.
 export async function POST(req) {
+  // Admin gate. Also enforced by middleware.js; repeated here so the
+  // route stays closed if the matcher is ever narrowed.
+  const denied = await guard(req);
+  if (denied) return denied;
+
   const { searchParams } = new URL(req.url);
   const season = parseInt(searchParams.get('season') || '2026');
   const week = parseInt(searchParams.get('week') || '1');
