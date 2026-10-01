@@ -17,8 +17,9 @@ const CFB_NAV = [
   { href: '/cfb/ingest', label: '⚙️ Ingest' },
 ];
 
-// The five-page NFL nav. Dashboard / ATS / O-U / Results are built in a later
-// step; only Ingest exists so far, so those four still 404.
+// The five-page NFL nav. All five routes exist. The NFL side is a tracking and
+// research tool: it records what the engine said and how that aged, and does
+// not label anything as a bet.
 const NFL_NAV = [
   { href: '/nfl/dashboard', label: '📊 Dashboard' },
   { href: '/nfl/ats', label: '🏈 ATS' },
