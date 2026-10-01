@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { sbFetch, fmtKickoff } from '../../../lib/supabase';
+import { sbFetch, sbRpc, fmtKickoff } from '../../../lib/supabase';
 import {
   TIER_COLOR, TIER_UNITS, fmtSpread, teamLine, nearMiss, tierChecklist,
-  DEFINITIONS, TIER_THRESHOLDS_DISPLAY,
+  DEFINITIONS, TIER_THRESHOLDS_DISPLAY, defFor,
 } from '../../../lib/bobby-model';
 import { attachBobbyRank } from '../../../lib/bobby-rank';
 import { shortTeam, teamSearchText } from '../../../lib/team-short';
@@ -21,6 +21,16 @@ const C = {
 };
 
 const TIER_ORDER = ['3U', '2U', '1U', 'Lean', 'No tier'];
+
+// Several listed systems are variants of one underlying rating, so a hit count
+// can look like broad agreement while really being one method counted four
+// times. Grouping them makes that visible.
+const SYSTEM_FAMILIES = [
+  { name: 'Sagarin', cols: ['linesagpred', 'linesaggm', 'linesag', 'linesagr'] },
+  { name: 'Pi-Rate', cols: ['linepimean', 'linepiratings', 'linepibias'] },
+];
+const FAMILY_OF = {};
+for (const f of SYSTEM_FAMILIES) for (const c of f.cols) FAMILY_OF[c] = f.name;
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -183,8 +193,8 @@ function InfoIcon({ defKey, active, onToggle }) {
   );
 }
 
-function DefBox({ defKey, onClose }) {
-  const d = DEFINITIONS[defKey];
+function DefBox({ defKey, onClose, config }) {
+  const d = defFor(defKey, config);
   if (!d) return null;
   return (
     <div style={{ borderTop: `1px solid ${C.gold}`, background: C.surface2, padding: '12px 16px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
@@ -194,6 +204,23 @@ function DefBox({ defKey, onClose }) {
       </div>
       <button onClick={onClose} aria-label="Close definition" style={{ width: 28, height: 28, flexShrink: 0, borderRadius: 4, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer', fontSize: 14 }}>✕</button>
     </div>
+  );
+}
+
+// "Top-10% hits 14/52" with a share bar and the side letter. The bar is the
+// share of predicting systems that put this game in their own biggest edges.
+function HitsMeter({ count, total, side, pct, title }) {
+  if (count == null) return null;
+  const share = total ? Math.min(100, (count / total) * 100) : 0;
+  return (
+    <span title={title} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
+      <span style={{ color: C.sub }}>Top-{pct}% hits</span>
+      <span style={{ color: C.text }}>{count}/{total ?? '—'}</span>
+      <span aria-hidden="true" style={{ width: 28, height: 5, background: C.bg, borderRadius: 3, overflow: 'hidden', display: 'inline-block' }}>
+        <span style={{ display: 'block', height: '100%', width: `${share.toFixed(0)}%`, background: C.gold }} />
+      </span>
+      {side && <span style={{ color: C.gold, fontWeight: 700 }}>{side === 'home' ? 'H' : 'A'}</span>}
+    </span>
   );
 }
 
@@ -268,7 +295,11 @@ function BottomSheet({ title, onClose, children, footer }) {
 // ---------------------------------------------------------------------------
 // Legend modal
 // ---------------------------------------------------------------------------
-function LegendModal({ onClose }) {
+function LegendModal({ onClose, config }) {
+  const c = config || {};
+  const num = (k, d) => (Number.isFinite(c[k]) ? c[k] : d);
+  const topkPct = Math.round(num('bobcat_topk_pct', 0.1) * 100);
+  const covPct = Math.round(num('min_coverage', 0.7) * 100);
   return (
     <Modal title="How to use THE Bobby Model" onClose={onClose} wide>
       <ol style={{ margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 8, fontSize: 14, lineHeight: 1.5, color: '#C9CFC8' }}>
@@ -299,6 +330,14 @@ function LegendModal({ onClose }) {
           <span><b style={{ color: C.sub }}>Grey chips</b> = research tags (side · source)</span>
           <span><b style={{ color: C.warn }}>Orange chip</b> = flag: 6+ edge, fade watch, thin pool, split top</span>
           <span><b style={{ color: C.green }}>Green</b> / <b style={{ color: C.warn }}>orange</b> in breakdowns = with / against the pick</span>
+        </div>
+        <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 6, padding: 14, display: 'flex', flexDirection: 'column', gap: 7, fontSize: 13, color: '#C9CFC8', lineHeight: 1.45 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>TOP-{topkPct}% HITS AND THE BOBCAT FORMULA</span>
+          <span><b style={{ color: C.text }}>Top-{topkPct}% hits</b> (shown as hits over systems predicting) counts the systems that put this game among their own biggest {topkPct}% of edges, and the letter is the side most of them took. Every system with a prediction counts, not just the weighted ones.</span>
+          <span><b style={{ color: C.gold }}>Bobcat Formula Pick</b> = consensus edge {num('bobcat_edge_min', 1.5)} to under {num('bobcat_edge_max', 3.0)}, on the same side as at least {num('bobcat_hits_min', 10)} of those hits, with at least {covPct}% weight coverage. Experimental and forward-tracked from Week {num('bobcat_forward_week', 5)}; the backtest evidence is weak and unstable, so treat it as something being measured, not something settled.</span>
+          <span><b style={{ color: C.lav }}>Split</b> = {num('bobcat_opp_conflict', 3)} or more of the hits landed on the opposite side, so the systems flagging the game disagree about which way.</span>
+          <span><b style={{ color: C.warn }}>Low coverage</b> = systems carrying less than {covPct}% of the weight have predictions for this game; 2U/3U plays are capped at 1U.</span>
+          <span style={{ color: C.sub }}>Open a card to see which systems flagged it. Variants of one rating (Sagarin, Pi-Rate) are grouped, because four variants of the same method are not four independent opinions.</span>
         </div>
       </div>
       <div style={{ fontSize: 12.5, color: C.sub, marginTop: 14 }}>
@@ -702,6 +741,19 @@ function GameCard({
 
   const nm = signal ? nearMiss({ ...signal, edge: signal.edge, tier }, config) : null;
   const flags = signal?.flags || [];
+
+  // Bobcat Formula + top-k hit reads. Thresholds come from cfb_tracker_config.
+  const bobcat = !!signal?.bobcat;
+  const hitCount = signal?.hit_count ?? null;
+  const hitOpp = signal?.hit_opp ?? null;
+  const modelsN = signal?.models_n ?? null;
+  const hitSide = signal?.hit_side || null;
+  const oppMin = Number.isFinite(config?.bobcat_opp_conflict) ? config.bobcat_opp_conflict : 3;
+  const split = hitOpp != null && hitOpp >= oppMin;
+  const lowCov = flags.includes('Low coverage');
+  const topkPct = Math.round((Number.isFinite(config?.bobcat_topk_pct) ? config.bobcat_topk_pct : 0.1) * 100);
+  const hitSideAbbr = hitSide === 'home' ? homeAbbr : hitSide === 'away' ? awayAbbr : null;
+
   const hasBadges = !!signal || !!nm || flags.length > 0 || (research || []).length > 0 || (picks || []).length > 0;
 
   const pickTeam = signal?.pick_side === 'home' ? home : signal?.pick_side === 'away' ? away : null;
@@ -743,7 +795,60 @@ function GameCard({
     { k: 'conv', label: 'Conviction', val: signal.conviction.toFixed(2) },
     { k: 'move', label: 'Line move', val: `${signal.opening_line != null ? fmtSpread(signal.opening_line) : '—'} → ${fmtSpread(signal.vegas_line)}` },
     { k: 'ou', label: 'Total (O/U)', val: game.over_under != null ? String(game.over_under) : '—' },
+    {
+      k: 'hits',
+      label: `Top-${topkPct}% hits`,
+      val: hitCount == null ? '—' : `${hitCount}/${modelsN ?? '—'}${hitSideAbbr ? ` ${hitSideAbbr}` : ''}`,
+    },
   ] : [];
+
+  // Per-system top-k detail, fetched once on first expand. It stays out of the
+  // week-level load: one game's worth of rows, on demand.
+  const [topk, setTopk] = useState(null);
+  const [topkErr, setTopkErr] = useState(null);
+  const topkAsked = useRef(false);
+  useEffect(() => {
+    if (!expanded || !signal || topkAsked.current) return;
+    topkAsked.current = true;
+    sbRpc('cfb_topk_detail', { p_game_id: game.id })
+      .then((rows) => setTopk(rows.map((r) => ({
+        ...r,
+        predicted_margin: parseFloat(r.predicted_margin),
+        model_edge: parseFloat(r.model_edge),
+        weight: r.weight != null ? parseFloat(r.weight) : null,
+      }))))
+      .catch((e) => setTopkErr(e.message));
+  }, [expanded, signal, game.id]);
+
+  // Flagged first, then by rank; grouped into families so repeated variants of
+  // one rating cannot pass for independent agreement.
+  const topkGroups = useMemo(() => {
+    if (!topk) return [];
+    const order = [...SYSTEM_FAMILIES.map((f) => f.name), 'Other'];
+    const by = {};
+    for (const r of topk) {
+      const fam = FAMILY_OF[r.colname] || 'Other';
+      (by[fam] = by[fam] || []).push(r);
+    }
+    for (const k of Object.keys(by)) {
+      by[k].sort((a, b) => (b.flagged === a.flagged ? a.rn - b.rn : b.flagged - a.flagged));
+    }
+    return order.filter((k) => by[k]?.length).map((k) => ({ family: k, rows: by[k] }));
+  }, [topk]);
+
+  const flaggedRows = (topk || []).filter((r) => r.flagged);
+  const famNote = useMemo(() => {
+    if (!flaggedRows.length) return null;
+    const counts = {};
+    for (const r of flaggedRows) {
+      const fam = FAMILY_OF[r.colname];
+      if (fam) counts[fam] = (counts[fam] || 0) + 1;
+    }
+    const parts = Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([fam, n]) => `${n} of ${flaggedRows.length} flags are ${fam} variants`);
+    return parts.length ? parts.join(' · ') : null;
+  }, [topk]);
 
   async function handleSaveNote() {
     if (!note.trim()) return;
@@ -783,6 +888,10 @@ function GameCard({
                 <span>{fmtKickoff(game.kickoff_at)}</span>
                 {game.tv_network && <span>{game.tv_network}</span>}
                 <span>O/U {game.over_under != null ? game.over_under : '—'}</span>
+                <HitsMeter
+                  count={hitCount} total={modelsN} side={hitSide} pct={topkPct}
+                  title={`${hitCount} of ${modelsN} systems put this game in their own top ${topkPct}% of edges${hitSideAbbr ? `, majority on ${hitSideAbbr}` : ''}`}
+                />
               </div>
             </div>
 
@@ -797,7 +906,24 @@ function GameCard({
                     <InfoIcon defKey="near" active={defKey === 'near'} onToggle={toggleDef} />
                   </Badge>
                 )}
-                {flags.map((f) => <Badge key={f} color={C.warn} filled>{f}</Badge>)}
+                {bobcat && (
+                  <Badge color={C.gold}>
+                    Bobcat Formula Pick
+                    <InfoIcon defKey="bobcat" active={defKey === 'bobcat'} onToggle={toggleDef} />
+                  </Badge>
+                )}
+                {split && (
+                  <Badge color={C.lav} filled>
+                    Split {hitCount} vs {hitOpp}
+                    <InfoIcon defKey="split" active={defKey === 'split'} onToggle={toggleDef} />
+                  </Badge>
+                )}
+                {flags.map((f) => (
+                  <Badge key={f} color={C.warn} filled>
+                    {f}
+                    {f === 'Low coverage' && <InfoIcon defKey="lowcov" active={defKey === 'lowcov'} onToggle={toggleDef} />}
+                  </Badge>
+                ))}
                 {(research || []).map((r) => (
                   <Badge key={r.id} color={C.sub} className="bm-badge-tap">
                     {researchDescription(r, (sd) => (useShort ? shortTeam(sd === 'home' ? home : away) : (sd === 'home' ? home : away)))}{r.source_label ? ` · ${r.source_label}` : ''}
@@ -845,7 +971,7 @@ function GameCard({
           </button>
         </div>
 
-        {defKey && <DefBox defKey={defKey} onClose={() => setDefKey(null)} />}
+        {defKey && <DefBox defKey={defKey} onClose={() => setDefKey(null)} config={config} />}
 
         {expanded && signal && (
           <div style={{ borderTop: `1px solid ${C.border}`, background: C.surface2, padding: 18, display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -926,6 +1052,65 @@ function GameCard({
                   ))}
                 </div>
               </div>
+            </div>
+
+            {/* Top-k hit detail: which systems put this game among their own
+                biggest edges, and on which side. Loaded on expand. */}
+            <div style={{ background: C.surface, border: `1px solid ${bobcat ? C.gold : C.border}`, borderRadius: 6, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>TOP-{topkPct}% HITS</span>
+                <InfoIcon defKey="hits" active={defKey === 'hits'} onToggle={toggleDef} />
+                {hitCount != null && (
+                  <HitsMeter count={hitCount} total={modelsN} side={hitSide} pct={topkPct} />
+                )}
+                {bobcat && (
+                  <Badge color={C.gold}>
+                    Bobcat Formula Pick
+                    <InfoIcon defKey="bobcat" active={defKey === 'bobcat'} onToggle={toggleDef} />
+                  </Badge>
+                )}
+                {split && (
+                  <Badge color={C.lav} filled>Split {hitCount} vs {hitOpp}</Badge>
+                )}
+                {signal.coverage != null && (
+                  <span style={{ ...FM, fontSize: 11, color: lowCov ? C.warn : C.sub }}>
+                    {(signal.coverage * 100).toFixed(0)}% weight coverage
+                  </span>
+                )}
+              </div>
+
+              {famNote && <span style={{ ...FM, fontSize: 11, color: C.lav }}>{famNote}</span>}
+
+              {topkErr && <span style={{ ...FM, fontSize: 11, color: C.warn }}>Could not load system detail: {topkErr}</span>}
+              {!topk && !topkErr && <span style={{ ...FM, fontSize: 11, color: C.sub }}>Loading system detail…</span>}
+
+              {topkGroups.map((grp) => (
+                <div key={grp.family} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <span style={{ ...FM, fontSize: 10, color: C.sub, letterSpacing: 0.4, textTransform: 'uppercase' }}>
+                    {grp.family} · {grp.rows.filter((r) => r.flagged).length} of {grp.rows.length} flagged
+                  </span>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {grp.rows.map((r) => (
+                      <span
+                        key={r.model_id}
+                        title={`${r.system_name} — predicts ${r.predicted_margin}, edge ${r.model_edge > 0 ? '+' : ''}${r.model_edge.toFixed(1)}, its own rank ${r.rn} of ${r.n} games${r.weight != null ? `, weight ${(r.weight * 100).toFixed(1)}%` : ', unweighted'}`}
+                        style={{
+                          ...FM, fontSize: 10.5, padding: '3px 7px', borderRadius: 4, whiteSpace: 'nowrap',
+                          display: 'inline-flex', alignItems: 'center', gap: 5,
+                          border: `1px solid ${r.flagged ? C.gold : C.border}`,
+                          background: r.flagged ? `${C.gold}1A` : 'transparent',
+                          color: r.flagged ? C.text : C.sub,
+                          opacity: r.flagged ? 1 : 0.55,
+                        }}
+                      >
+                        <span>{r.colname.replace(/^line/, '')}</span>
+                        {r.side && <span style={{ fontWeight: 700, color: r.flagged ? C.gold : C.sub }}>{r.side === 'home' ? 'H' : 'A'}</span>}
+                        <span>{r.rn} of {r.k}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -1223,6 +1408,7 @@ const SORTS = [
   { v: 'conv', label: 'Conviction', short: 'Conv' },
   { v: 'vs', label: 'Vote share', short: 'Vote' },
   { v: 'edge', label: 'Edge', short: 'Edge' },
+  { v: 'hits', label: 'Top-10% hits', short: 'Hits' },
   { v: 'sd', label: 'Std dev (tightest)', short: 'STD' },
   { v: 'tier', label: 'Tier', short: 'Tier' },
   { v: 'time', label: 'Game time', short: 'Time' },
@@ -1281,6 +1467,7 @@ export default function BobbyModelDashboard() {
   // array means "all games".
   const [tierSel, setTierSel] = useState([]);
   const [flagsOnly, setFlagsOnly] = useState(false);
+  const [bobcatOnly, setBobcatOnly] = useState(false);
   const [minePlusOnly, setMinePlusOnly] = useState(false);
   const [teamSearch, setTeamSearch] = useState('');
   const [sortBy, setSortBy] = useState('rank');
@@ -1327,7 +1514,7 @@ export default function BobbyModelDashboard() {
         .catch(() => setTotalSystems(null));
 
       const signalByGame = {};
-      for (const s of signals) signalByGame[s.game_id] = { ...s, edge: parseFloat(s.edge), vegas_line: parseFloat(s.vegas_line), opening_line: s.opening_line != null ? parseFloat(s.opening_line) : null, consensus: parseFloat(s.consensus), vote_share: parseFloat(s.vote_share), std_dev: parseFloat(s.std_dev), conviction: parseFloat(s.conviction) };
+      for (const s of signals) signalByGame[s.game_id] = { ...s, edge: parseFloat(s.edge), vegas_line: parseFloat(s.vegas_line), opening_line: s.opening_line != null ? parseFloat(s.opening_line) : null, consensus: parseFloat(s.consensus), vote_share: parseFloat(s.vote_share), std_dev: parseFloat(s.std_dev), conviction: parseFloat(s.conviction), coverage: s.coverage != null ? parseFloat(s.coverage) : null };
 
       const built = games.map((game) => ({ game, signal: signalByGame[game.id] || null }));
       built.sort((a, b) => (b.signal?.conviction ?? -1) - (a.signal?.conviction ?? -1));
@@ -1431,6 +1618,7 @@ export default function BobbyModelDashboard() {
       const t = r.signal?.tier || 'No tier';
       if (tierSel.length && !tierSel.includes(t)) return false;
       if (flagsOnly && !(r.signal?.flags?.length > 0)) return false;
+      if (bobcatOnly && !r.signal?.bobcat) return false;
       if (minePlusOnly && (picksByGame[r.game.id] || []).length === 0) return false;
       if (teamSearch.trim()) {
         const q = teamSearch.trim().toLowerCase();
@@ -1447,6 +1635,7 @@ export default function BobbyModelDashboard() {
       conv: (a, b) => (b.signal?.conviction ?? -1) - (a.signal?.conviction ?? -1) || (b.signal?.vote_share ?? -1) - (a.signal?.vote_share ?? -1),
       vs: (a, b) => (b.signal?.vote_share ?? -1) - (a.signal?.vote_share ?? -1),
       edge: (a, b) => Math.abs(b.signal?.edge ?? 0) - Math.abs(a.signal?.edge ?? 0),
+      hits: (a, b) => (b.signal?.hit_count ?? -1) - (a.signal?.hit_count ?? -1) || (a.signal?.hit_opp ?? 999) - (b.signal?.hit_opp ?? 999),
       sd: (a, b) => (a.signal?.std_dev ?? 999) - (b.signal?.std_dev ?? 999),
       tier: (a, b) => TR[a.signal?.tier || 'No tier'] - TR[b.signal?.tier || 'No tier'],
       time: (a, b) => new Date(a.game.kickoff_at || 0) - new Date(b.game.kickoff_at || 0),
@@ -1454,7 +1643,7 @@ export default function BobbyModelDashboard() {
     };
     list = [...list].sort(sorters[sortBy] || sorters.rank);
     return list;
-  }, [rankedRows, tierSel, flagsOnly, minePlusOnly, teamSearch, sortBy, picksByGame]);
+  }, [rankedRows, tierSel, flagsOnly, bobcatOnly, minePlusOnly, teamSearch, sortBy, picksByGame]);
 
   const toggleTier = (t) => setTierSel((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]);
 
@@ -1462,6 +1651,7 @@ export default function BobbyModelDashboard() {
   const activeChips = [
     ...tierSel.map((t) => ({ key: `tier-${t}`, label: t, color: TIER_COLOR[t], clear: () => toggleTier(t) })),
     ...(flagsOnly ? [{ key: 'flags', label: 'Flags', color: C.warn, clear: () => setFlagsOnly(false) }] : []),
+    ...(bobcatOnly ? [{ key: 'bobcat', label: 'Bobcat only', color: C.gold, clear: () => setBobcatOnly(false) }] : []),
     ...(minePlusOnly ? [{ key: 'mine', label: 'My picks only', color: C.blue, clear: () => setMinePlusOnly(false) }] : []),
     ...(teamSearch.trim() ? [{ key: 'search', label: `"${teamSearch.trim()}"`, color: C.gold, clear: () => setTeamSearch('') }] : []),
   ];
@@ -1520,7 +1710,7 @@ export default function BobbyModelDashboard() {
       `}</style>
 
       <div style={{ maxWidth: 1100, margin: '0 auto' }}>
-        {showLegend && <LegendModal onClose={() => setShowLegend(false)} />}
+        {showLegend && <LegendModal onClose={() => setShowLegend(false)} config={config} />}
         {showCard && <MyCardModal initialTab={cardTab} season={season} rows={rows} picksByGame={picksByGame} onClose={() => setShowCard(false)} />}
         {pickModal && (
           <PickModal
@@ -1608,6 +1798,7 @@ export default function BobbyModelDashboard() {
             {/* Desktop filter row */}
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }} className="bm-only-desktop">
               <button onClick={() => setFlagsOnly((v) => !v)} style={chipStyle(flagsOnly, C.warn)}>Flags</button>
+              <button onClick={() => setBobcatOnly((v) => !v)} style={chipStyle(bobcatOnly, C.gold)}>Bobcat only</button>
               <button onClick={() => setMinePlusOnly((v) => !v)} style={chipStyle(minePlusOnly, C.blue)}>My picks only</button>
               <SearchField value={teamSearch} onChange={setTeamSearch} style={{ width: 200 }} />
               <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1673,6 +1864,9 @@ export default function BobbyModelDashboard() {
                   <span style={{ ...FM, fontSize: 11, color: C.sub, letterSpacing: 0.5, textTransform: 'uppercase' }}>Game flags</span>
                   <button onClick={() => setFlagsOnly((v) => !v)} style={{ ...chipStyle(flagsOnly, C.warn), minHeight: 48, width: '100%', textAlign: 'left' }}>
                     {flagsOnly ? '✓ ' : ''}Flagged games only
+                  </button>
+                  <button onClick={() => setBobcatOnly((v) => !v)} style={{ ...chipStyle(bobcatOnly, C.gold), minHeight: 48, width: '100%', textAlign: 'left' }}>
+                    {bobcatOnly ? '✓ ' : ''}Bobcat Formula Picks only
                   </button>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
