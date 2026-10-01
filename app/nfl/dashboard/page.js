@@ -21,7 +21,7 @@
 
 import { useMemo, useState } from 'react';
 import {
-  C, FH, FM, MARKET, GameCard, NoMarketData, SeasonWeekPicker,
+  BackfillNotice, C, FH, FM, MARKET, GameCard, NoMarketData, SeasonWeekPicker,
   UnvalidatedNotice, boardCounts, useDefaultWeek, useNflBoard,
 } from '../../../lib/nfl-board';
 
@@ -52,6 +52,7 @@ export default function NflDashboard() {
       </div>
 
       <UnvalidatedNotice cfg={board.cfg} market={market} />
+      <BackfillNotice rows={board.rows} />
 
       <SeasonWeekPicker
         season={season} setSeason={setSeason} week={week} setWeek={setWeek}

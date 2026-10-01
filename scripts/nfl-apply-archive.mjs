@@ -153,7 +153,15 @@ for (const g of ex.games) {
 }
 
 // Local checksum, so a partial write is detectable rather than assumed fine.
-const sum = preds.reduce((t, r) => t + Number(r.predicted_line), 0);
+//
+// Rounded to 2dp per value BEFORE summing, because nfl_raw_predictions
+// .predicted_line is numeric(6,2): Postgres rounds on store, so a checksum of
+// the raw CSV floats does not match what comes back out. Summing raw floats
+// made a correct 2026 load look like it had lost 0.009 (the 2025 load matched
+// only because its rounding deltas happened to cancel). Compare this against
+//   select round(sum(predicted_line),2) from nfl_raw_predictions ...
+const r2 = (v) => Math.round(Number(v) * 100) / 100;
+const sum = preds.reduce((t, r) => t + r2(r.predicted_line), 0);
 console.log(`market=${market} season=${season}${dry ? '  [DRY RUN]' : ''}`);
 console.log(`  csv rows            ${parsed.rows.length}`);
 console.log(`  model columns used  ${ex.modelCols.length}`);

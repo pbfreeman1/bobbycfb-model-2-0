@@ -17,7 +17,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { sbFetchAll, fmtKickoff } from '../../../lib/supabase';
 import { TIER_COLOR } from '../../../lib/bobby-model';
 import {
-  C, FH, FM, sel, SEASONS, MARKET, Badge,
+  C, FH, FM, sel, SEASONS, MARKET, Badge, isPreRegistered,
 } from '../../../lib/nfl-board';
 
 const MARKETS = ['spread', 'total'];
@@ -32,7 +32,7 @@ function useResults(season, market) {
       try {
         const picks = await sbFetchAll(
           `nfl_bobby_picks?select=id,game_id,week,market,tier,units,pick_side,line_used,consensus,edge,` +
-          `agreement,locked_at&market=eq.${market}&season=eq.${season}&order=week.asc`
+          `agreement,locked_at,computed_at&market=eq.${market}&season=eq.${season}&order=week.asc`
         );
 
         const gameIds = [...new Set(picks.map((p) => p.game_id))];
@@ -81,7 +81,7 @@ function summarise(picks, grades, games) {
   const byWeek = new Map();
   const blank = (week) => ({
     week, picks: 0, tiered: 0, graded: 0, pending: 0,
-    w: 0, l: 0, p: 0, units: 0, clvSum: 0, clvN: 0, beatClose: 0,
+    w: 0, l: 0, p: 0, units: 0, clvSum: 0, clvN: 0, beatClose: 0, backfill: 0,
   });
 
   for (const pick of picks) {
@@ -90,6 +90,7 @@ function summarise(picks, grades, games) {
     row.picks++;
     const tiered = pick.tier !== 'No tier';
     if (tiered) row.tiered++;
+    if (isPreRegistered(pick, games[pick.game_id]) === false) row.backfill++;
 
     const g = grades[pick.id];
     // Only tiered picks carry units, so only they move the P/L. Untiered picks
@@ -111,7 +112,7 @@ function summarise(picks, grades, games) {
 
   const weeks = [...byWeek.values()].sort((a, b) => a.week - b.week);
   const total = weeks.reduce((t, r) => {
-    for (const k of ['picks', 'tiered', 'graded', 'pending', 'w', 'l', 'p', 'clvN', 'beatClose']) t[k] += r[k];
+    for (const k of ['picks', 'tiered', 'graded', 'pending', 'w', 'l', 'p', 'clvN', 'beatClose', 'backfill']) t[k] += r[k];
     t.units += r.units; t.clvSum += r.clvSum;
     return t;
   }, { ...blank('Total') });
@@ -199,6 +200,24 @@ export default function NflResults() {
         </div>
       )}
 
+      {!loading && !error && total.backfill > 0 && (
+        <div style={{
+          border: '1px dashed #facc15', background: '#facc1514', borderRadius: 6,
+          padding: '12px 14px', margin: '0 0 16px', ...FM, fontSize: 12, lineHeight: 1.7, color: C.text,
+        }}>
+          <b style={{ color: '#facc15' }}>
+            {total.backfill === total.picks
+              ? `All ${total.picks} picks are backfill.`
+              : `${total.backfill} of ${total.picks} picks are backfill.`}
+          </b>{' '}
+          Backfill rows were computed after kickoff, so the result was already knowable when the
+          number was written, and they were never pre-registered. They record what the engine would
+          have said and cannot support the formula — read the W-L-P and units columns on those rows
+          as a description of the model, not as a result. The NFL forward test begins with the first
+          week computed before kickoff.
+        </div>
+      )}
+
       {!loading && !error && total.picks > 0 && (
         <>
           <WeekTable weeks={weeks} total={total} openWeek={openWeek} setOpenWeek={setOpenWeek} />
@@ -215,7 +234,7 @@ export default function NflResults() {
   );
 }
 
-const WCOLS = '62px 58px 58px 86px 62px 78px 72px 70px';
+const WCOLS = '62px 58px 58px 86px 62px 78px 72px 70px 86px';
 
 function WeekTable({ weeks, total, openWeek, setOpenWeek }) {
   return (
@@ -223,10 +242,10 @@ function WeekTable({ weeks, total, openWeek, setOpenWeek }) {
       <div style={{ overflowX: 'auto' }}>
         <div style={{
           display: 'grid', gridTemplateColumns: WCOLS, gap: 9, padding: '8px 13px',
-          background: C.surface2, ...FM, fontSize: 9.5, color: C.sub, letterSpacing: 0.4, minWidth: 560,
+          background: C.surface2, ...FM, fontSize: 9.5, color: C.sub, letterSpacing: 0.4, minWidth: 646,
         }}>
           <span>WEEK</span><span>PICKS</span><span>TIERED</span><span>W-L-P</span>
-          <span>WIN%</span><span>UNITS</span><span>AVG CLV</span><span>BEAT CLOSE</span>
+          <span>WIN%</span><span>UNITS</span><span>AVG CLV</span><span>BEAT CLOSE</span><span>COHORT</span>
         </div>
 
         {weeks.map((r) => {
@@ -238,7 +257,7 @@ function WeekTable({ weeks, total, openWeek, setOpenWeek }) {
               aria-expanded={on}
               style={{
                 display: 'grid', gridTemplateColumns: WCOLS, gap: 9, alignItems: 'center',
-                width: '100%', textAlign: 'left', padding: '8px 13px', minWidth: 560,
+                width: '100%', textAlign: 'left', padding: '8px 13px', minWidth: 646,
                 borderTop: `1px solid ${C.border}`, border: 'none',
                 borderLeft: `3px solid ${on ? C.blue : 'transparent'}`,
                 background: on ? C.surface2 : 'transparent', color: C.text,
@@ -255,6 +274,11 @@ function WeekTable({ weeks, total, openWeek, setOpenWeek }) {
               </span>
               <span style={{ color: C.sub }}>{r.clvN ? signed(r.clvSum / r.clvN) : '—'}</span>
               <span style={{ color: C.sub }}>{r.graded ? `${r.beatClose}/${r.graded}` : '—'}</span>
+              <span style={{ color: r.backfill === r.picks ? '#facc15' : r.backfill ? C.gold : C.green }}>
+                {r.backfill === 0 ? 'forward'
+                  : r.backfill === r.picks ? 'backfill'
+                  : `${r.backfill}/${r.picks} backfill`}
+              </span>
             </button>
           );
         })}
@@ -262,7 +286,7 @@ function WeekTable({ weeks, total, openWeek, setOpenWeek }) {
         <div style={{
           display: 'grid', gridTemplateColumns: WCOLS, gap: 9, alignItems: 'center',
           padding: '9px 13px', borderTop: `2px solid ${C.border}`, background: C.surface2,
-          ...FM, fontSize: 12, fontWeight: 700, minWidth: 560,
+          ...FM, fontSize: 12, fontWeight: 700, minWidth: 646,
         }}>
           <span>TOTAL</span>
           <span style={{ color: C.sub }}>{total.picks}</span>
@@ -272,6 +296,11 @@ function WeekTable({ weeks, total, openWeek, setOpenWeek }) {
           <span style={{ color: unitColor(total.units) }}>{total.graded ? signed(total.units) : '—'}</span>
           <span style={{ color: C.sub }}>{total.clvN ? signed(total.clvSum / total.clvN) : '—'}</span>
           <span style={{ color: C.sub }}>{total.graded ? `${total.beatClose}/${total.graded}` : '—'}</span>
+          <span style={{ color: total.backfill === total.picks ? '#facc15' : total.backfill ? C.gold : C.green }}>
+            {total.backfill === 0 ? 'forward'
+              : total.backfill === total.picks ? 'all backfill'
+              : `${total.backfill}/${total.picks} backfill`}
+          </span>
         </div>
       </div>
     </div>
@@ -319,6 +348,10 @@ function PickTable({ week, market, picks, games, grades }) {
               </span>
               <span style={{ color: tierColor, fontWeight: 700 }}>
                 {pick.tier === 'No tier' ? '—' : pick.tier}
+                {isPreRegistered(pick, game) === false && (
+                  <span title="Computed after kickoff — not pre-registered"
+                        style={{ color: '#facc15', fontWeight: 400 }}> ·bf</span>
+                )}
               </span>
               <span style={{ color: g ? RESULT_COLOR[norm(g.result)] || C.sub : C.sub, fontWeight: 700 }}>
                 {g ? (norm(g.result) || g.result || '?') : game?.completed ? 'ungraded' : 'pending'}
