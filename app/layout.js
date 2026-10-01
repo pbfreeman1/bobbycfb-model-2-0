@@ -9,6 +9,7 @@ const CFB_NAV = [
   { href: '/cfb/pss-dashboard', label: '🧠 PSS Dashboard' },
   { href: '/cfb/mss-dashboard', label: '🧮 MSS Dashboard' },
   { href: '/cfb/bobby-results', label: '🏈 Bobby Results' },
+  { href: '/cfb/bobcat-log', label: '🐾 Bobcat Log' },
   { href: '/cfb/research', label: '🔍 Research' },
   { href: '/cfb/models', label: '🤖 Models' },
   { href: '/cfb/results', label: '📅 Results' },
