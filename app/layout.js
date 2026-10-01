@@ -9,6 +9,7 @@ const CFB_NAV = [
   { href: '/cfb/pss-dashboard', label: '🧠 PSS Dashboard' },
   { href: '/cfb/mss-dashboard', label: '🧮 MSS Dashboard' },
   { href: '/cfb/bobby-results', label: '🏈 Bobby Results' },
+  { href: '/cfb/bobcat-log', label: '🐾 Bobcat Log' },
   { href: '/cfb/research', label: '🔍 Research' },
   { href: '/cfb/models', label: '🤖 Models' },
   { href: '/cfb/results', label: '📅 Results' },
@@ -16,13 +17,14 @@ const CFB_NAV = [
   { href: '/cfb/ingest', label: '⚙️ Ingest' },
 ];
 
+// The five-page NFL nav. All five routes exist. The NFL side is a tracking and
+// research tool: it records what the engine said and how that aged, and does
+// not label anything as a bet.
 const NFL_NAV = [
   { href: '/nfl/dashboard', label: '📊 Dashboard' },
-  { href: '/nfl/pss', label: '🧠 PSS' },
-  { href: '/nfl/strong-agreement', label: '🔥 Strong Agreement' },
+  { href: '/nfl/ats', label: '🏈 ATS' },
+  { href: '/nfl/totals', label: '🎯 O/U' },
   { href: '/nfl/results', label: '📅 Results' },
-  { href: '/nfl/bobby-results', label: '🏈 Bobby Results' },
-  { href: '/nfl/research', label: '🔍 Research' },
   { href: '/nfl/ingest', label: '⚙️ Ingest' },
 ];
 
