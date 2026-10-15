@@ -111,6 +111,63 @@ carries two functionally identical insert policies (`public insert user_picks`
 and `public write user_picks`); the NFL side has one, which is the same
 effective permission.
 
+## CFB ingest + kickoff lock, applied 2026-10-15
+
+Fetched from the live history with `supabase migration fetch` and kept as exact
+copies except where noted:
+
+| version | name |
+|---|---|
+| 20261015132007 | `cfb_ingest_foundation` |
+| 20261015132030 | `cfb_norm_team_fix` |
+| 20261015132149 | `cfb_ingest_predictions_fn` |
+| 20261015132211 | `cfb_compute_kickoff_lock` |
+| 20261015210537 | `cfb_current_week_fn` |
+
+`migration fetch` pulls the WHOLE remote history, which here means 40+ files,
+duplicate versions of migrations already tracked under different timestamps
+(`nfl_bobby_schema` as both `20260930000100` and `20260930145410`), and
+overwrites of four existing local files. Only these five were kept; everything
+else was reverted. Do not re-run `migration fetch` into this directory without
+reverting the rest.
+
+### Two edits so a fresh rebuild works
+
+**1. The `cfb_import_staging` dependency is gone.** `cfb_ingest_foundation` and
+`cfb_norm_team_fix` both seeded `cfb_team_alias` with an `insert … select` that
+joined a one-off archive-load staging table against `games` on week and final
+score. That table is not part of the schema and no longer exists, so neither
+migration could replay.
+
+`cfb_ingest_foundation` now carries the literal result of that derivation — 49
+rows read back from the live table — as a static `insert … values` with
+`on conflict (norm_key) do update set team = excluded.team`. The keys are stored
+as literals, already in the final normal form produced by the `\y`-based
+`cfb_norm_team`, so the seed does not depend on which version of the function is
+in place when it runs. Verified: all 49 stored keys satisfy
+`norm_key = cfb_norm_team(norm_key)`.
+
+`cfb_norm_team_fix`'s re-seed had nothing left to re-derive, so it is replaced by
+a `do` block that raises if any `cfb_team_alias` row is not in normal form —
+a loud failure if the foundation seed is ever edited, instead of a matcher that
+quietly stops resolving aliased names.
+
+**2. `cfb_compute` / `cfb_compute_bobcat` ordering.** Both are `create or
+replace`d by `20261015132211_cfb_compute_kickoff_lock`, having been defined
+earlier in `bobby_model_core`, `20261001000100_bobcat_formula_and_coverage_guardrail`
+and `20261002000100_cfb_post_kickoff_lock`. Filename order already puts
+`20261015132211` last, so the newest definition wins with no re-ordering. Left
+alone deliberately — **do not reorder these files.**
+
+### Not verified
+
+A true fresh rebuild (`supabase db reset`) was not run: it needs a local
+Postgres via Docker, which was not available. What was checked is that both
+edited files have no executable reference to `cfb_import_staging`, dollar
+quoting is balanced, and the alias-normal-form assumption the static seed rests
+on holds against the live table. **Run `supabase db reset` before trusting the
+rebuild.**
+
 ## Later todo — baseline snapshot of the pre-branch schema
 
 **Not done, deliberately.** `supabase/migrations/` was empty before this
@@ -119,7 +176,7 @@ the PSS tables, the original `nfl_*` tables, `nfl_strong_agreement_plays`)
 exists only in the live database's `supabase_migrations.schema_migrations`. A
 fresh environment cannot currently be rebuilt from this repo.
 
-Worth dumping those 29 earlier migrations into files as a baseline so the repo
+Worth dumping the remaining earlier migrations into files as a baseline so the repo
 is self-sufficient. Left for a separate pass because it touches nothing on this
 branch and would bury the NFL work in a very large diff.
 
