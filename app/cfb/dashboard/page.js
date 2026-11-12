@@ -297,6 +297,27 @@ function BottomSheet({ title, onClose, children, footer }) {
 // ---------------------------------------------------------------------------
 // Legend modal
 // ---------------------------------------------------------------------------
+// Accordion section: on desktop a plain passthrough; on phones a tappable header
+// with a one-line summary, body kept mounted (hidden) so typed notes persist.
+function Acc({ mobile, title, summary, info, open, onToggle, children }) {
+  if (!mobile) return children;
+  return (
+    <div className="bm-acc" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', minHeight: 48 }}>
+        <button type="button" onClick={onToggle} aria-expanded={open} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '0 6px 0 14px', minHeight: 48, background: 'transparent', border: 'none', color: C.text, cursor: 'pointer', textAlign: 'left' }}>
+          <span style={{ ...FM, fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{title}</span>
+          {summary && <span style={{ ...FM, fontSize: 11, color: C.sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>{summary}</span>}
+        </button>
+        {info}
+        <button type="button" onClick={onToggle} aria-label={open ? 'Collapse' : 'Expand'} tabIndex={-1} style={{ width: 44, minHeight: 48, background: 'transparent', border: 'none', color: C.sub, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transform: open ? 'rotate(180deg)' : 'none' }}><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </button>
+      </div>
+      <div className="bm-acc-body" style={{ display: open ? 'block' : 'none', borderTop: `1px solid ${C.border}` }}>{children}</div>
+    </div>
+  );
+}
+
 function LegendModal({ onClose, config }) {
   const c = config || {};
   const num = (k, d) => (Number.isFinite(c[k]) ? c[k] : d);
@@ -719,6 +740,8 @@ function GameCard({
   // Phone layout: a compact card (matchup, pick, three stats). Everything else
   // sits one tap deeper, in the expanded view or the add sheet.
   const isMobile = useIsMobile();
+  const [accOpen, setAccOpen] = useState({ checks: true, vote: true });
+  const toggleAcc = (k) => setAccOpen((o) => ({ ...o, [k]: !o[k] }));
   const [addOpen, setAddOpen] = useState(false);
   const [showResearch, setShowResearch] = useState(false);
 
@@ -1112,8 +1135,9 @@ function GameCard({
 
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.4fr)', gap: 18 }} className="bm-detail-grid">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <Acc mobile={isMobile} title="Tier checklist" summary={checklist.rows.every((r) => r.pass) ? 'All pass' : `${checklist.rows.filter((r) => r.pass).length}/${checklist.rows.length} pass`} info={<InfoIcon defKey="checks" active={defKey === 'checks'} onToggle={toggleDef} />} open={!!accOpen.checks} onToggle={() => toggleAcc('checks')}>
                 <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: 14 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginBottom: 8 }}>
+                  <div className="bm-sec-title" style={{ display: 'flex', alignItems: 'center', gap: 2, marginBottom: 8 }}>
                     <span style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>TIER CHECKLIST · {checklist.title}</span>
                     <InfoIcon defKey="checks" active={defKey === 'checks'} onToggle={toggleDef} />
                   </div>
@@ -1125,9 +1149,11 @@ function GameCard({
                     </div>
                   ))}
                 </div>
+                </Acc>
 
+                <Acc mobile={isMobile} title="Vote split" summary={`${(signal.vote_share * 100).toFixed(0)}% ${pickAbbr} · ${onCount}/${signal.voters}`} info={<InfoIcon defKey="vs" active={defKey === 'vs'} onToggle={toggleDef} />} open={!!accOpen.vote} onToggle={() => toggleAcc('vote')}>
                 <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <div className="bm-sec-title" style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                     <span style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>HOW THE VOTE BREAKS</span>
                     <InfoIcon defKey="vs" active={defKey === 'vs'} onToggle={toggleDef} />
                   </div>
@@ -1138,9 +1164,11 @@ function GameCard({
                   <div style={{ ...FM, fontSize: 11, color: C.green }}>{pickAbbr} {teamLine(signal.vegas_line, signal.pick_side)} · {(signal.vote_share * 100).toFixed(1)}% of weight · {onCount} systems</div>
                   <div style={{ ...FM, fontSize: 11, color: C.warn }}>{signal.pick_side === 'home' ? awayAbbr : homeAbbr} · {((1 - signal.vote_share) * 100).toFixed(1)}% · {signal.voters - onCount} systems</div>
                 </div>
+                </Acc>
 
+                <Acc mobile={isMobile} title="Notes" summary={note.trim() ? note.trim().slice(0, 40) : 'Add a note'} open={!!accOpen.notes} onToggle={() => toggleAcc('notes')}>
                 <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <label style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>NOTES</label>
+                  <label className="bm-sec-title" style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>NOTES</label>
                   <textarea rows={4} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Injuries, weather, line shopping, why you played it or passed…" style={{ ...FM, fontSize: 12, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 4, color: C.text, padding: 10, resize: 'vertical' }} />
                   <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                     <button onClick={handleSaveNote} disabled={savingNote || !note.trim()} style={{ ...FM, fontSize: 12, minHeight: 36, padding: '0 14px', borderRadius: 4, border: `1px solid ${C.gold}`, background: `${C.gold}1A`, color: C.gold, cursor: 'pointer' }}>
@@ -1148,41 +1176,49 @@ function GameCard({
                     </button>
                   </div>
                 </div>
+                </Acc>
               </div>
 
+              <Acc mobile={isMobile} title="Systems" summary={`${signal.voters} voting`} info={<InfoIcon defKey="weight" active={defKey === 'weight'} onToggle={toggleDef} />} open={!!accOpen.systems} onToggle={() => toggleAcc('systems')}>
               <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, overflow: 'hidden' }}>
-                <div style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 2 }}>
+                <div className="bm-sec-title" style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 2 }}>
                   <span style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>INDIVIDUAL BREAKDOWN · {signal.voters} VOTING SYSTEMS</span>
                   <InfoIcon defKey="weight" active={defKey === 'weight'} onToggle={toggleDef} />
                 </div>
                 <div style={{ overflowX: 'auto' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 96px 54px 130px 60px', gap: 10, padding: '7px 14px', background: C.surface2, ...FM, fontSize: 10, color: C.sub, letterSpacing: 0.4, minWidth: 480 }}>
-                    <span>SYSTEM</span><span>PREDICTS</span><span>SIDE</span><span>WEIGHT</span><span>2026 ATS</span>
+                  <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'minmax(0,1fr) 62px 34px 46px' : 'minmax(0,1fr) 96px 54px 130px 60px', gap: isMobile ? 8 : 10, padding: '7px 14px', background: C.surface2, ...FM, fontSize: 10, color: C.sub, letterSpacing: 0.4, minWidth: isMobile ? 0 : 480 }}>
+                    <span>SYSTEM</span><span>PREDICTS</span><span>SIDE</span>{isMobile ? <span style={{ textAlign: 'right' }}>WT</span> : <><span>WEIGHT</span><span>2026 ATS</span></>}
                   </div>
                   {systemRows.map((m, i) => (
-                    <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 96px 54px 130px 60px', gap: 10, alignItems: 'center', padding: '7px 14px', borderTop: `1px solid ${C.border}`, ...FM, fontSize: 12, minWidth: 480 }}>
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: isMobile ? 'minmax(0,1fr) 62px 34px 46px' : 'minmax(0,1fr) 96px 54px 130px 60px', gap: isMobile ? 8 : 10, alignItems: 'center', padding: '7px 14px', borderTop: `1px solid ${C.border}`, ...FM, fontSize: isMobile ? 11 : 12, minWidth: isMobile ? 0 : 480 }}>
                       <span style={{ ...FH, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.name}</span>
                       <span style={{ color: '#C9CFC8' }}>{m.pred}</span>
                       <span style={{ fontWeight: 700, color: m.on ? C.green : C.warn }}>{m.side}</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <div style={{ flexGrow: 1, height: 6, background: C.bg, borderRadius: 3, overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${Math.min(100, (m.share / 16) * 100)}%`, background: m.on ? C.green : C.warn }} />
+                      {isMobile ? (
+                        <span style={{ textAlign: 'right', color: '#C9CFC8' }}>{m.share.toFixed(1)}%</span>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <div style={{ flexGrow: 1, height: 6, background: C.bg, borderRadius: 3, overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${Math.min(100, (m.share / 16) * 100)}%`, background: m.on ? C.green : C.warn }} />
+                          </div>
+                          <span style={{ width: 44, textAlign: 'right', color: '#C9CFC8' }}>{m.share.toFixed(1)}%</span>
                         </div>
-                        <span style={{ width: 44, textAlign: 'right', color: '#C9CFC8' }}>{m.share.toFixed(1)}%</span>
-                      </div>
-                      <span style={{ color: C.sub }}>{m.rec}</span>
+                      )}
+                      {!isMobile && <span style={{ color: C.sub }}>{m.rec}</span>}
                     </div>
                   ))}
                 </div>
               </div>
+              </Acc>
             </div>
 
             {/* Top-k hit detail: which systems put this game among their own
                 biggest edges, and on which side. Loaded on expand. */}
+            <Acc mobile={isMobile} title={`Top-${topkPct}% hits`} summary={hitCount != null ? `${hitCount}/${modelsN}${bobcat ? ' · Bobcat' : ''}${split ? ' · split' : ''}` : 'Loading…'} info={<InfoIcon defKey="hits" active={defKey === 'hits'} onToggle={toggleDef} />} open={!!accOpen.hits} onToggle={() => toggleAcc('hits')}>
             <div style={{ background: C.surface, border: `1px solid ${bobcat ? C.gold : C.border}`, borderRadius: 6, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>TOP-{topkPct}% HITS</span>
-                <InfoIcon defKey="hits" active={defKey === 'hits'} onToggle={toggleDef} />
+                <span className="bm-sec-title" style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>TOP-{topkPct}% HITS</span>
+                <span className="bm-sec-title"><InfoIcon defKey="hits" active={defKey === 'hits'} onToggle={toggleDef} /></span>
                 {hitCount != null && (
                   <HitsMeter count={hitCount} total={modelsN} side={hitSide} pct={topkPct} />
                 )}
@@ -1235,6 +1271,7 @@ function GameCard({
                 </div>
               ))}
             </div>
+            </Acc>
           </div>
         )}
         {expanded && !signal && (
@@ -1839,6 +1876,9 @@ export default function BobbyModelDashboard() {
           .bm-match-row { flex-direction: column; align-items: stretch; gap: 6px; }
           .bm-match-meta { flex-wrap: wrap; }
           /* Tier tiles become one row of filter pills: "3U 5", "2U 10"... */
+          .bm-acc-body > div { border: none !important; background: transparent !important; border-radius: 0 !important; }
+          .bm-acc-body .bm-sec-title { display: none !important; }
+          .bm-detail-grid { grid-template-columns: minmax(0, 1fr) !important; }
           .bm-hide-mobile { display: none !important; }
           .bm-weights { border: none !important; background: none !important; padding: 0 !important; font-size: 11px; width: 100%; }
           .bm-hdr-actions { display: grid !important; grid-template-columns: 1fr 1fr 1.5fr; width: 100%; gap: 6px !important; }
@@ -2002,7 +2042,7 @@ export default function BobbyModelDashboard() {
                 footer={(
                   <>
                     <button onClick={resetFilters} style={{ flex: 1, ...FM, fontSize: 14, minHeight: 48, borderRadius: 8, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer' }}>Reset</button>
-                    <button onClick={() => setSheetOpen(false)} style={{ flex: 2, ...FM, fontSize: 14, fontWeight: 700, minHeight: 48, borderRadius: 8, border: 'none', background: C.gold, color: '#0F1412', cursor: 'pointer' }}>Done</button>
+                    <button onClick={() => setSheetOpen(false)} style={{ flex: 2, ...FM, fontSize: 14, fontWeight: 700, minHeight: 48, borderRadius: 8, border: 'none', background: C.gold, color: '#0F1412', cursor: 'pointer' }}>{`Show ${displayed.length} game${displayed.length === 1 ? '' : 's'}`}</button>
                   </>
                 )}
               >
