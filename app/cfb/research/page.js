@@ -5,6 +5,7 @@ import { buildTagPayload } from '../../../lib/research-sources';
 import { teamSpread, fmtSigned } from '../../../lib/research-report';
 import SourcePicker, { useResearchSources } from '../_research/SourcePicker';
 import KamImport from '../_research/KamImport';
+import ArticleImport from '../_research/ArticleImport';
 
 const SB_HDR = { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' };
 
@@ -115,6 +116,14 @@ export default function Research() {
         <KamImport
           season={season} week={week} games={games} tallies={tallies}
           source={sources.find((x) => x.name === 'KAM') || null}
+          onDone={load} inputStyle={inp} labelStyle={lbl}
+        />
+      )}
+
+      {week != null && !loading && (
+        <ArticleImport
+          season={season} week={week} games={games} tallies={tallies}
+          sources={sources.filter((x) => x.name !== 'KAM')}
           onDone={load} inputStyle={inp} labelStyle={lbl}
         />
       )}
