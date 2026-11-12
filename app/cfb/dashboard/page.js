@@ -1483,6 +1483,13 @@ export default function BobbyModelDashboard() {
   const [teamSearch, setTeamSearch] = useState('');
   const [sortBy, setSortBy] = useState('rank');
   const [sheetOpen, setSheetOpen] = useState(false);
+  // Ticks once a minute so "Game time" sort moves a game to the bottom as soon
+  // as it kicks off, without a page refresh.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 60000);
+    return () => clearInterval(id);
+  }, []);
 
   const [picksByGame, setPicksByGame] = useState({});
   const [researchByGame, setResearchByGame] = useState({});
@@ -1649,12 +1656,20 @@ export default function BobbyModelDashboard() {
       hits: (a, b) => (b.signal?.hit_count ?? -1) - (a.signal?.hit_count ?? -1) || (a.signal?.hit_opp ?? 999) - (b.signal?.hit_opp ?? 999),
       sd: (a, b) => (a.signal?.std_dev ?? 999) - (b.signal?.std_dev ?? 999),
       tier: (a, b) => TR[a.signal?.tier || 'No tier'] - TR[b.signal?.tier || 'No tier'],
-      time: (a, b) => new Date(a.game.kickoff_at || 0) - new Date(b.game.kickoff_at || 0),
+      // Upcoming games first (soonest kickoff on top). Anything that has already
+      // kicked off, or is marked final, drops to the bottom of the list.
+      time: (a, b) => {
+        const started = (r) => r.game.status === 'final' || (!!r.game.kickoff_at && new Date(r.game.kickoff_at).getTime() <= nowMs);
+        const sa = started(a);
+        const sb = started(b);
+        if (sa !== sb) return sa ? 1 : -1;
+        return new Date(a.game.kickoff_at || 0) - new Date(b.game.kickoff_at || 0);
+      },
       team: (a, b) => a.game.away_team.localeCompare(b.game.away_team),
     };
     list = [...list].sort(sorters[sortBy] || sorters.rank);
     return list;
-  }, [rankedRows, tierSel, flagsOnly, bobcatOnly, minePlusOnly, teamSearch, sortBy, picksByGame]);
+  }, [rankedRows, tierSel, flagsOnly, bobcatOnly, minePlusOnly, teamSearch, sortBy, picksByGame, nowMs]);
 
   const toggleTier = (t) => setTierSel((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]);
 
