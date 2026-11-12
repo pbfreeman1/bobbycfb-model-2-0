@@ -39,7 +39,7 @@ export async function POST(req) {
     } else {
       return Response.json({ ok: false, error: 'Send a url or text.' }, { status: 400 });
     }
-    if (text.length < 500) return Response.json({ ok: false, error: `Only ${text.length} characters of article text were found (the page may need JavaScript or a login). Use "Paste article text" instead.` }, { status: 502 });
+    if (text.length < 1500) return Response.json({ ok: false, error: `Only ${text.length} characters of article text were found (the page may need JavaScript or a login). Use "Paste article text" instead.` }, { status: 502 });
 
     // 2. This week's games
     const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -62,7 +62,7 @@ export async function POST(req) {
 
     const { picks, skipped } = resolvePicks(block.input?.picks, games);
     return Response.json({
-      ok: true, chars: text.length, truncated: text.length >= MAX_ARTICLE_CHARS, model: MODEL, usage: aj.usage || null,
+      ok: true, chars: text.length, preview: text.slice(0, 500), truncated: text.length >= MAX_ARTICLE_CHARS, model: MODEL, usage: aj.usage || null,
       picks: picks.map((p) => ({ game_id: p.game.id, type: p.type, side: p.side, line: p.line, experts: p.experts, text: p.text })),
       skipped,
     });

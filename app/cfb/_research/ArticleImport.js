@@ -125,6 +125,11 @@ export default function ArticleImport({ season, week, games, tallies, sources, o
               </label>
             ))}
           </div>
+          {plan.length === 0 && (
+            <div style={{ marginTop: 8, fontSize: 12, color: '#e5a64f' }}>
+              No usable picks. Claude was given {result.chars?.toLocaleString()} characters of the page, starting: <span style={{ color: '#8a92a3' }}>“{(result.preview || '').replace(/\s+/g, ' ').slice(0, 300)}…”</span>. If that is not the article, the site likely builds it with JavaScript: use Paste article text.
+            </div>
+          )}
           {result.skipped.length > 0 && (
             <details style={{ marginTop: 8, fontSize: 12, color: '#e5a64f' }}>
               <summary>{result.skipped.length} not tagged</summary>
