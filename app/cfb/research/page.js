@@ -4,6 +4,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, sbFetch, getCurrentWeek } from '../../
 import { buildTagPayload } from '../../../lib/research-sources';
 import { teamSpread, fmtSigned } from '../../../lib/research-report';
 import SourcePicker, { useResearchSources } from '../_research/SourcePicker';
+import KamImport from '../_research/KamImport';
 
 const SB_HDR = { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' };
 
@@ -109,6 +110,14 @@ export default function Research() {
         <label style={{ fontSize: 12, color: '#8a92a3' }}>Week</label>
         <input type="number" value={week ?? ''} onChange={e => setWeek(+e.target.value)} style={{ ...inp, width: 60 }} />
       </div>
+
+      {week != null && !loading && (
+        <KamImport
+          season={season} week={week} games={games} tallies={tallies}
+          source={sources.find((x) => x.name === 'KAM') || null}
+          onDone={load} inputStyle={inp} labelStyle={lbl}
+        />
+      )}
 
       {/* Quick-add form */}
       <div className="card" style={{ marginBottom: 20 }}>

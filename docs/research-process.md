@@ -26,3 +26,6 @@ Graded spread tags sliced by model tier, with/against model, dog/fav, home/road,
 
 ## Lines
 Each game now has a frozen `pt_line` (PredictionTracker's `line`, set when the CSV is uploaded, locked at kickoff). The model computes and recalibrates on it, falling back to `current_line` when missing. A `Stale line` badge appears when `pt_line` and the book line differ by 3+ points or flip sign; it is display-only.
+
+## KAM import (Quick Tag > Import KAM ranks)
+Set the week first (Quick Tag defaults to the last graded week). **Import KAM ATS** or **Import KAM Totals** reads the Kambour page (highest probability first), shows a preview, and saves on confirm. Ranks 1-10 become `KAM #n`, 11-15 become `KAM Topish` (both cutoffs adjustable). ATS pick = the team whose predicted score covers the printed spread; totals use the O/U shown on the page. Existing KAM tags for the same game+side+type are left alone if the rank matches or re-ranked if not (keeps the original tag-time line). Games not matched (rare name mismatches) are listed so you can tag them by hand. If the fetch fails or the page layout changes, use **Paste page text**. The KAM pages are not dated, so a low match count usually means the wrong week.
