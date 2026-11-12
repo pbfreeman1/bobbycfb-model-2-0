@@ -29,7 +29,7 @@ export async function POST(req) {
     if (body.text && String(body.text).trim()) {
       text = htmlToArticleText(String(body.text));
     } else if (body.url) {
-      if (!isAllowedUrl(body.url)) return Response.json({ ok: false, error: 'That site is not on the allowed list (ESPN, CBS, Fox, Yahoo, VSIN, SportsLine).' }, { status: 400 });
+      if (!isAllowedUrl(body.url)) return Response.json({ ok: false, error: 'That site is not on the allowed list (ESPN, CBS, Fox, Yahoo, VSIN, SportsLine, Action Network).' }, { status: 400 });
       const res = await fetch(body.url, {
         headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BobbyModels/1.0)', Accept: 'text/html,application/xhtml+xml' },
         signal: AbortSignal.timeout(20000), cache: 'no-store', redirect: 'follow',
