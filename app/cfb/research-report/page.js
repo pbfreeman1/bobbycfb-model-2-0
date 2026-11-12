@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { sbFetchAll } from '../../../lib/supabase';
 import { shortTeam } from '../../../lib/team-short';
 import { buildReport, recStr, recPct, sideLabel, fmtSigned } from '../../../lib/research-report';
+import { buildInsights, pct as insPct, decided } from '../../../lib/research-insights';
 
 const C = {
   bg: '#0F1412', surface: '#161D1A', surface2: '#1B2320', border: '#2A332E',
@@ -27,6 +28,7 @@ const TABS = [
   { v: 'sides', label: 'Sides' },
   { v: 'games', label: 'Games' },
   { v: 'sources', label: 'Sources' },
+  { v: 'insights', label: 'Insights' },
   { v: 'weeks', label: 'Weeks' },
 ];
 
@@ -113,6 +115,12 @@ export default function ResearchReport() {
     list.sort((a, b) => (sortBy === 'kickoff' ? kick(a) - kick(b) : b.total - a.total || kick(a) - kick(b)));
     return list;
   }, [report, minTags, bobbyF, statusF, sortBy]);
+
+  // Insights split spread and totals themselves, so only the week filter applies.
+  const insights = useMemo(
+    () => (raw ? buildInsights(buildReport({ ...raw, tags: raw.tags.filter((t) => week === 'all' || t.week === week) })) : null),
+    [raw, week],
+  );
 
   const sources = useMemo(() => {
     if (!report) return [];
@@ -208,6 +216,41 @@ export default function ResearchReport() {
             </div>
           )}
           <div className="rr-note">Similar labels are folded into one source (for example every “Kam - #n” is KAM). A tag naming several outlets credits each. Tags with no source are grouped under Unlabeled. Win % grades the tagged side against the line and counts each tag, so a side tagged by three sources is three results.</div>
+        </>
+      )}
+
+      {tab === 'insights' && insights && (
+        <>
+          <div className="rr-note" style={{ marginTop: 0 }}>
+            Graded tags only, each game+side counted once, flat 1u (win +1, loss −1.1). These slices were chosen after looking at weeks 1-10, so treat <b>All</b> as hypotheses and trust <b>Forward</b> (week {insights.forwardFrom}+) as the test. Spread tags overall: <b>{recStr(insights.spreadAll)}</b> ({fmtPct(insPct(insights.spreadAll))}, {insights.spreadAll.units > 0 ? '+' : ''}{insights.spreadAll.units}u); forward <b>{recStr(insights.spreadForward)}</b>.
+          </div>
+          {insights.groups.map((g) => (
+            <div key={g.title} className="rr-card" style={{ marginBottom: 12 }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>{g.title}</div>
+              <div style={{ fontSize: 12, color: C.sub, margin: '2px 0 8px' }}>{g.note}</div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, ...NUM }}>
+                  <thead>
+                    <tr style={{ color: C.sub, textAlign: 'left', fontSize: 11 }}>
+                      <th style={{ padding: '2px 8px 4px 0' }}></th><th style={{ padding: '2px 8px 4px 0' }}>All</th><th style={{ padding: '2px 8px 4px 0' }}>%</th><th style={{ padding: '2px 8px 4px 0' }}>Units</th><th style={{ padding: '2px 0 4px 0' }}>Forward</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {g.rows.map((r) => (
+                      <tr key={r.label} style={{ borderTop: `1px solid ${C.border}` }}>
+                        <td style={{ padding: '6px 8px 6px 0' }}>{r.label}</td>
+                        <td style={{ padding: '6px 8px 6px 0' }}>{recStr(r.all)}</td>
+                        <td style={{ padding: '6px 8px 6px 0', color: decided(r.all) < 10 ? C.sub : C.text }}>{fmtPct(insPct(r.all))}{decided(r.all) < 10 ? '*' : ''}</td>
+                        <td style={{ padding: '6px 8px 6px 0', color: r.all.units > 0 ? C.green : r.all.units < 0 ? C.warn : C.sub }}>{r.all.units > 0 ? '+' : ''}{r.all.units}</td>
+                        <td style={{ padding: '6px 0', color: C.sub }}>{decided(r.fwd) + r.fwd.p ? recStr(r.fwd) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+          <div className="rr-note">* fewer than 10 decided results; noise-sized. Use the week selector to look at one week, and the ATS / O/U toggle only changes the other tabs (Insights always splits spread and totals itself).</div>
         </>
       )}
 

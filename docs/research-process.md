@@ -20,3 +20,9 @@ One tag per source per side. Two sources on the same play are two tags.
 Badges: `Line moved` (3+ points or sign flip since tag/signal), `Low coverage` (signal coverage under 0.90, re-pull before the noon ET kickoffs). Totals tags are not bucketed (net loser in weeks 1-10).
 
 The scoreboard uses 1u flat paper units (win +1, loss -1.1) and splits **forward** (week 11+) from **backfill** (weeks 1-10). The bucket rules were found by slicing weeks 1-10, so treat backfill as a hypothesis and trust forward results.
+
+## Insights (Research Report > Insights)
+Graded spread tags sliced by model tier, with/against model, dog/fav, home/road, distinct sources, KAM rank band and source, plus totals. Each game+side counts once, flat 1u. "All" is the in-sample hypothesis; the Forward column (week 11+) is the test. Rows with under 10 decided results are marked `*`.
+
+## Lines
+Each game now has a frozen `pt_line` (PredictionTracker's `line`, set when the CSV is uploaded, locked at kickoff). The model computes and recalibrates on it, falling back to `current_line` when missing. A `Stale line` badge appears when `pt_line` and the book line differ by 3+ points or flip sign; it is display-only.
