@@ -41,3 +41,7 @@ Source SportsLine + "Paste article text" with the whole page from sportsline.com
 
 ### SportsLine expert picks tab
 Source SportsLine + paste the whole Expert Picks tab. Each card becomes a tag labelled `SportsLine - <expert>` (spread and over/under picks; moneylines listed as not tagged). Cards name teams by nickname, resolved through a nickname table in `lib/sportsline-experts.js`; a card whose game can't be matched is listed as not tagged with the nicknames shown, so add the nickname to the table if one is missing.
+
+
+## Weekend Guide (/cfb/weekend-guide)
+After tags are loaded, predictions uploaded and Compute has run, open Weekend Guide and click Generate. It is a two-page reference: page 1 is the core card (model 1U + tag), leans (tagged underdogs the model does not oppose), a coverage/flag banner and your My Card plays; page 2 has model 3U/2U + tag, research-vs-model, model-only, other tags and totals tags. Each section shows its record (weeks 1-10 backfill vs forward) so nothing looks more proven than it is. Plays you logged with + Bobby Pick are marked MY PLAY and cross-referenced on My Card. Print / Save PDF gives two letter pages; Download images saves two PNGs for your phone. Logic: `lib/weekend-guide.js` (section rules follow the weekly process doc).

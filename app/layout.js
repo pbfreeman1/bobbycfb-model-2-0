@@ -12,6 +12,7 @@ const CFB_NAV = [
   { href: '/cfb/bobcat-log', label: '🐾 Bobcat Log' },
   { href: '/cfb/research', label: '🔍 Quick Tag' },
   { href: '/cfb/play-finder', label: '🎯 Play Finder' },
+  { href: '/cfb/weekend-guide', label: '📖 Weekend Guide' },
   { href: '/cfb/research-report', label: '📊 Research Report' },
   { href: '/cfb/models', label: '🤖 Models' },
   { href: '/cfb/results', label: '📅 Results' },
