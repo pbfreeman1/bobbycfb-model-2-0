@@ -60,9 +60,12 @@ export async function POST(req) {
     const block = (aj.content || []).find((b) => b.type === 'tool_use');
     if (!block) return Response.json({ ok: false, error: 'The model returned no picks block.' }, { status: 502 });
 
-    const { picks, skipped } = resolvePicks(block.input?.picks, games);
+    // The model occasionally returns the array as a JSON string; accept both.
+    let rawPicks = block.input?.picks;
+    if (typeof rawPicks === 'string') { try { rawPicks = JSON.parse(rawPicks); } catch { rawPicks = []; } }
+    const { picks, skipped } = resolvePicks(rawPicks, games);
     return Response.json({
-      ok: true, chars: text.length, preview: text.slice(0, 500), truncated: text.length >= MAX_ARTICLE_CHARS, model: MODEL, usage: aj.usage || null,
+      ok: true, rawCount: Array.isArray(rawPicks) ? rawPicks.length : 0, stopReason: aj.stop_reason || null, chars: text.length, preview: text.slice(0, 500), truncated: text.length >= MAX_ARTICLE_CHARS, model: MODEL, usage: aj.usage || null,
       picks: picks.map((p) => ({ game_id: p.game.id, type: p.type, side: p.side, line: p.line, experts: p.experts, text: p.text })),
       skipped,
     });

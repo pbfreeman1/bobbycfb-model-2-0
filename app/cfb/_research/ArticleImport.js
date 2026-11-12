@@ -127,7 +127,7 @@ export default function ArticleImport({ season, week, games, tallies, sources, o
           </div>
           {plan.length === 0 && (
             <div style={{ marginTop: 8, fontSize: 12, color: '#e5a64f' }}>
-              No usable picks. Claude was given {result.chars?.toLocaleString()} characters of the page, starting: <span style={{ color: '#8a92a3' }}>“{(result.preview || '').replace(/\s+/g, ' ').slice(0, 300)}…”</span>. If that is not the article, the site likely builds it with JavaScript: use Paste article text.
+              No usable picks. Claude was given {result.chars?.toLocaleString()} characters of the page, starting: <span style={{ color: '#8a92a3' }}>“{(result.preview || '').replace(/\s+/g, ' ').slice(0, 300)}…”</span>. If that is not the article, the site likely builds it with JavaScript: use Paste article text. (Model returned {result.rawCount ?? '?'} picks, stop reason: {result.stopReason || 'n/a'}.)
             </div>
           )}
           {result.skipped.length > 0 && (
