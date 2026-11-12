@@ -50,7 +50,7 @@ export default function ArticleImport({ season, week, games, tallies, sources, o
 
   const plan = useMemo(() => {
     if (!result || !source) return [];
-    const picks = result.picks.map((p) => ({ ...p, game: gameById.get(p.game_id) })).filter((p) => p.game).map((p) => ({ game: p.game, type: p.type, side: p.side, line: p.line, experts: p.experts, text: p.text }));
+    const picks = result.picks.map((p) => ({ ...p, game: gameById.get(p.game_id) })).filter((p) => p.game).map((p) => ({ game: p.game, type: p.type, side: p.side, line: p.line, experts: p.experts, expert: (p.experts || [])[0] || '', text: p.text }));
     return planArticleTags(picks, tallies, { season, week, source });
   }, [result, source, tallies, gameById, season, week]);
 

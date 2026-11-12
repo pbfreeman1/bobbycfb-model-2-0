@@ -160,3 +160,11 @@ Applied 2026-11-12 (Supabase `cfb_pt_line_and_stale_flag`). Engine change; see t
 - `cfb_compute` and `cfb_recalibrate` use `coalesce(pt_line, current_line)`. `cfb_grade` is unchanged (it already uses the frozen signal line). New display-only flag `Stale line` when `pt_line` and `current_line` differ by `stale_line` (3) points or flip sign. No tier effect.
 - Dry-run results (rolled back first): recomputing week 11 gave 0 differences in tier/units/side/line/edge on all 64 signals; recalibrated weights identical (max abs diff 0, no model crossed zero; ATS win/loss counts moved for 42 models, which is irrelevant at `w_ats = 0`); a test game with `pt_line = current + 4` used the PT line and got the flag; updating a started game's `pt_line` was refused; the ingest RPC set `pt_line` on an unstarted game and skipped a started one.
 - `/api/grade`, `/api/compute` and the PSS routes (older models) still read `games.current_line` and were not changed.
+
+## 20261112000300_research_picks_expert
+
+Applied 2026-11-12 (Supabase `research_picks_expert`). Additive.
+
+- `research_picks.expert` (nullable text). When set (and no KAM rank), the insert trigger labels the tag `"<source> - <expert>"`, e.g. `VSIN - Steve Makinen`. The report still folds it into the VSIN source (alias match on "vsin"), so source rollups are unchanged while each tag counts on its own.
+- Article import now makes one tag per expert per game+side+type; same expert is deduped (compared by last name, and legacy tags are matched through their note).
+- Dry-run verified: expert tag labelled `VSIN - Steve Makinen`, no-expert tag stays `VSIN`.
