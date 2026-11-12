@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { buildExtractionRequest, htmlToArticleText, isAllowedUrl, resolvePicks, MAX_ARTICLE_CHARS } from '../../../lib/article-import';
+import { looksLikePickSheet, resolveSheetPicks } from '../../../lib/sportsline-sheet';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -47,13 +48,24 @@ export async function POST(req) {
     if (gErr) throw new Error(`games: ${gErr.message}`);
     if (!games?.length) return Response.json({ ok: false, error: `No games found for season ${season} week ${week}.` }, { status: 400 });
 
+    // 2b. SportsLine's pick sheet is a table: parse it directly (A and A+ simulation picks).
+    if (body.text && /sportsline/i.test(String(body.sourceName || '')) && looksLikePickSheet(body.text)) {
+      const { picks, skipped, rows } = resolveSheetPicks(String(body.text), games);
+      return Response.json({
+        ok: true, mode: 'sportsline-sheet', rawCount: picks.length, stopReason: null, chars: String(body.text).length,
+        preview: `SportsLine pick sheet: ${rows} games read, A/A+ simulation picks only.`, truncated: false, model: null, usage: null,
+        picks: picks.map((p) => ({ game_id: p.game.id, type: p.type, side: p.side, line: p.line, experts: p.experts, text: p.text })),
+        skipped,
+      });
+    }
+
     // 3. Ask Claude for structured picks (forced tool call)
     const { system, user, tool } = buildExtractionRequest(text, games, { sourceName: body.sourceName });
     const ar = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: MODEL, max_tokens: 4096, system, tools: [tool], tool_choice: { type: 'tool', name: tool.name }, messages: [{ role: 'user', content: user }] }),
-      signal: AbortSignal.timeout(50000),
+      body: JSON.stringify({ model: MODEL, max_tokens: 16000, system, tools: [tool], tool_choice: { type: 'tool', name: tool.name }, messages: [{ role: 'user', content: user }] }),
+      signal: AbortSignal.timeout(55000),
     });
     const aj = await ar.json().catch(() => ({}));
     if (!ar.ok) return Response.json({ ok: false, error: `Anthropic API ${ar.status}: ${aj?.error?.message || 'request failed'}` }, { status: 502 });

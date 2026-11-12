@@ -34,3 +34,7 @@ Set the week first (Quick Tag defaults to the last graded week). **Import KAM AT
 Pick the source, paste the article URL (ESPN, CBS, Fox, Yahoo, VSIN, SportsLine hosts only), click **Read article**. The server fetches the text and Claude extracts spread and total picks, matched to the selected week's games. Preview, untick anything wrong, Save. One tag per source per game+side+type (existing ones are skipped); the expert names go in the tag note. Moneylines, team totals, halves, props and parlays are listed under "not tagged". If a site blocks the fetch or needs JavaScript or a login, use **Paste article text** (select all on the page, copy, paste).
 
 Vercel env vars: `ANTHROPIC_API_KEY` (required), `IMPORT_PASSCODE` (optional but recommended: when set, the page asks for it once), `ANTHROPIC_MODEL` (optional, default `claude-haiku-5-5`).
+
+
+### SportsLine pick sheet
+Source SportsLine + "Paste article text" with the whole page from sportsline.com/college-football/picks/ (select all, copy). The importer reads the table directly (no model call) and tags the **A and A+** simulation picks: spreads and totals become tags labelled `SportsLine - Model A` / `SportsLine - Model A+`; moneyline picks are listed as not tagged. B and C grades are ignored. The "expert picks" count column is not used yet.

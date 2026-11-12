@@ -1,0 +1,184 @@
+Game Information	Projected Score	Odds	Picks	Simulation
+Nov 12, 9:00PM ET				
+Louisiana UL-Monroe	35 17	O/U 47.5 +10.5	0 Expert Picks	A UL -10.5
+Matchup Analysis				
+Nov 14, 12:00PM ET				
+Auburn Miss. State	26 28	O/U 50.5 +2.5	0 Expert Picks	A MISSST +120
+Matchup Analysis				
+Nov 14, 12:00PM ET				
+Northwestern Ohio State	17 33	O/U 44.5 -14	0 Expert Picks	A OVER 44.5
+Matchup Analysis				
+Nov 14, 12:00PM ET				
+Wake Forest SMU	32 27	O/U 60.5 -1.5	1 Expert Picks	A WAKE +1.5
+Matchup Analysis				
+Nov 14, 1:00PM ET				
+East Carolina Charlotte	36 17	O/U 45.5 +11.5	0 Expert Picks	A ECU -11.5
+Matchup Analysis				
+Nov 14, 1:00PM ET				
+UAB Temple	22 30	O/U 48.5 -2.5	0 Expert Picks	A TEMPLE -134
+Matchup Analysis				
+Nov 14, 2:00PM ET				
+Kennesaw St. Sam Houston	30 22	O/U 46.5 +7	0 Expert Picks	A OVER 46.5
+Matchup Analysis				
+Nov 14, 2:00PM ET				
+Tulane Rice	27 23	O/U 47.5 -2.5	0 Expert Picks	A TULANE +2.5
+Matchup Analysis				
+Nov 14, 3:00PM ET				
+New Mexico St. Missouri St.	25 29	O/U 49.5 -1.5	0 Expert Picks	A OVER 49.5
+Matchup Analysis				
+Nov 14, 3:00PM ET				
+Tennessee Texas A&M	25 24	O/U 43.5 +2.5	0 Expert Picks	A OVER 43.5
+Matchup Analysis				
+Nov 14, 3:30PM ET				
+Boston College Notre Dame	7 45	O/U 52.5 -29.5	0 Expert Picks	A ND -29.5
+Matchup Analysis				
+Nov 14, 3:30PM ET				
+FAU Tulsa	26 37	O/U 74.5 -5.5	0 Expert Picks	A UNDER 74.5
+Matchup Analysis				
+Nov 14, 3:30PM ET				
+Michigan Oregon	16 32	O/U 38.5 -10.5	0 Expert Picks	A OVER 38.5
+Matchup Analysis				
+Nov 14, 3:30PM ET				
+Nevada N. Illinois	30 23	O/U 47.5 +7	0 Expert Picks	A OVER 47.5
+Matchup Analysis				
+Nov 14, 4:15PM ET				
+Ole Miss Oklahoma	28 25	O/U 49.5 -1.5	1 Expert Picks	A MISS -110
+Matchup Analysis				
+Nov 14, 5:30PM ET				
+Kansas West Virginia	30 29	O/U 67.5 -3	1 Expert Picks	A UNDER 67.5
+Matchup Analysis				
+Nov 14, 6:00PM ET				
+Oregon State Boise St.	23 36	O/U 63.5 -14.5	1 Expert Picks	A UNDER 63.5
+Matchup Analysis				
+Nov 14, 7:00PM ET				
+Louisville North Carolina	29 24	O/U 59.5 +3.5	0 Expert Picks	A UNDER 59.5
+Matchup Analysis				
+Nov 14, 7:00PM ET				
+Minnesota Penn State	16 31	O/U 41.5 -9.5	0 Expert Picks	A OVER 41.5
+Matchup Analysis				
+Nov 14, 7:30PM ET				
+Texas LSU	25 28	O/U 46.5 -4	0 Expert Picks	A OVER 46.5
+Matchup Analysis				
+Nov 14, 9:00PM ET				
+North Texas UTSA	34 30	O/U 76.5 +2.5	0 Expert Picks	A UNDER 76.5
+Matchup Analysis				
+Nov 14, 9:30PM ET				
+Texas Tech Oklahoma State	31 30	O/U 73.5 -3.5	1 Expert Picks	A UNDER 73.5
+Matchup Analysis				
+Nov 14, 9:30PM ET				
+Utah St. San Diego St.	27 23	O/U 42.5 +2.5	0 Expert Picks	A OVER 42.5
+Matchup Analysis				
+Nov 14, 10:00PM ET				
+Wyoming UTEP	27 20	O/U 39.5 +8.5	0 Expert Picks	A OVER 39.5
+Matchup Analysis				
+Nov 14, 10:30PM ET				
+Colorado St. Washington St.	25 31	O/U 66.5 -9.5	0 Expert Picks	A UNDER 66.5
+Matchup Analysis				
+Nov 14, 11:00PM ET				
+N. Dakota St. Hawaii	30 23	O/U 38.5 +6.5	0 Expert Picks	A OVER 38.5
+Matchup Analysis				
+Nov 13, 9:00PM ET				
+Illinois UCLA	20 29	O/U 47.5 -10	0 Expert Picks	B ILL +308
+Matchup Analysis				
+Nov 13, 10:15PM ET				
+Houston Colorado	34 21	O/U 51.5 +9.5	0 Expert Picks	B OVER 51.5
+Matchup Analysis				
+Nov 14, 12:00PM ET				
+Cincinnati Iowa St.	25 30	O/U 59.5 -3	0 Expert Picks	B UNDER 59.5
+Matchup Analysis				
+Nov 14, 12:00PM ET				
+Duke Miami (Fla.)	19 38	O/U 54.5 -13.5	0 Expert Picks	B MIAMI -13.5
+Matchup Analysis				
+Nov 14, 12:00PM ET				
+Wisconsin Maryland	28 20	O/U 42.5 +8.5	0 Expert Picks	B OVER 42.5
+Matchup Analysis				
+Nov 14, 12:30PM ET				
+Nebraska Rutgers	33 15	O/U 51.5 +15.5	0 Expert Picks	B NEB -15.5
+Matchup Analysis				
+Nov 14, 12:45PM ET				
+Alabama Vanderbilt	33 15	O/U 50.5 +17.5	0 Expert Picks	B UNDER 50.5
+Matchup Analysis				
+Nov 14, 2:00PM ET				
+Kansas State TCU	20 29	O/U 44.5 -10.5	0 Expert Picks	B OVER 44.5
+Matchup Analysis				
+Nov 14, 3:30PM ET				
+California Virginia	17 33	O/U 46.5 -10	0 Expert Picks	B UVA -10
+Matchup Analysis				
+Nov 14, 3:30PM ET				
+Jacksonville St. W. Kentucky	34 26	O/U 54.5 +7.5	0 Expert Picks	B OVER 54.5
+Matchup Analysis				
+Nov 14, 3:30PM ET				
+Missouri Georgia	15 36	O/U 47.5 -15.5	0 Expert Picks	B UGA -15.5
+Matchup Analysis				
+Nov 14, 3:30PM ET				
+Middle Tenn. Liberty	13 39	O/U 53.5 -21	0 Expert Picks	B LIB -21
+Matchup Analysis				
+Nov 14, 3:30PM ET				
+USC Indiana	19 33	O/U 50.5 -8.5	1 Expert Picks	B IND -8.5
+Matchup Analysis				
+Nov 14, 4:00PM ET				
+Fresno St. Texas St.	26 32	O/U 59.5 -9.5	0 Expert Picks	B FRESNO +9.5
+Matchup Analysis				
+Nov 14, 4:15PM ET				
+Washington Michigan St.	26 21	O/U 42.5 +3.5	0 Expert Picks	B OVER 42.5
+Matchup Analysis				
+Nov 14, 6:15PM ET				
+Florida Kentucky	22 27	O/U 52.5 -3.5	0 Expert Picks	B UNDER 52.5
+Matchup Analysis				
+Nov 14, 7:00PM ET				
+San Jose St. Air Force	14 32	O/U 47.5 -12.5	0 Expert Picks	B AF -12.5
+Matchup Analysis				
+Nov 14, 7:30PM ET				
+Purdue Iowa	17 33	O/U 47.5 -17.5	0 Expert Picks	B PURDUE +665
+Matchup Analysis				
+Nov 14, 7:30PM ET				
+Stanford Virginia Tech	19 36	O/U 58.5 -15.5	0 Expert Picks	B UNDER 58.5
+Matchup Analysis				
+Nov 12, 8:00PM ET				
+Memphis South Florida	28 24	O/U 49.5 +4	0 Expert Picks	C OVER 49.5
+Matchup Analysis				
+Nov 13, 7:00PM ET				
+Florida State Pittsburgh	23 29	O/U 52.5 -3.5	1 Expert Picks	C PITT -3.5
+Matchup Analysis				
+Nov 14, 12:00PM ET				
+Syracuse NC State	28 26	O/U 53.5 +3	0 Expert Picks	C NCST +3
+Matchup Analysis				
+Nov 14, 12:00PM ET				
+James Madison UConn	32 25	O/U 57.5 +4	0 Expert Picks	C JMAD -4
+Matchup Analysis				
+Nov 14, 12:30PM ET				
+Georgia Tech Clemson	17 31	O/U 47.5 -13.5	0 Expert Picks	C CLEM -562
+Matchup Analysis				
+Nov 14, 1:00PM ET				
+Arkansas St. C. Carolina	25 27	O/U 51.5 -1.5	0 Expert Picks	C OVER 51.5
+Matchup Analysis				
+Nov 14, 3:00PM ET				
+FIU Delaware	23 30	O/U 53.5 -4.5	0 Expert Picks	C UNDER 53.5
+Matchup Analysis				
+Nov 14, 3:30PM ET				
+Arizona St. UCF	23 29	O/U 48.5 -3	0 Expert Picks	C OVER 48.5
+Matchup Analysis				
+Nov 14, 3:30PM ET				
+Baylor BYU	21 30	O/U 48.5 -7.5	0 Expert Picks	C BYU -7.5
+Matchup Analysis				
+Nov 14, 3:30PM ET				
+Ga. Southern Georgia St.	30 25	O/U 56.5 +6	0 Expert Picks	C UNDER 56.5
+Matchup Analysis				
+Nov 14, 5:00PM ET				
+So. Miss Louisiana Tech	18 37	O/U 56.5 -17.5	0 Expert Picks	C UNDER 56.5
+Matchup Analysis				
+Nov 14, 6:00PM ET				
+App. St. Marshall	28 27	O/U 53.5 +1.5	0 Expert Picks	C OVER 53.5
+Matchup Analysis				
+Nov 14, 7:00PM ET				
+Troy South Alabama	24 29	O/U 55.5 -3	0 Expert Picks	C SALA -3
+Matchup Analysis				
+Nov 14, 7:30PM ET				
+UNLV New Mexico	15 31	O/U 46.5 -14.5	0 Expert Picks	C NMEX -14.5
+Matchup Analysis				
+Nov 14, 7:30PM ET				
+Utah Arizona	29 24	O/U 54.5 +2.5	1 Expert Picks	C UTAH -2.5
+Matchup Analysis				
+Nov 14, 7:45PM ET				
+South Carolina Arkansas	31 20	O/U 51.5 +7	0 Expert Picks	C SC -7
+Matchup Analysis				
