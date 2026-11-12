@@ -140,3 +140,13 @@ predictiontracker spine.
 
 2025 regular-season primetime breaks down as 18 SNF + 21 MNF + 17 TNF + 1 Friday
 + 3 Saturday = 60, every one at or after 7pm ET.
+
+## 20261112000100_research_sources_structured_tags
+
+Applied 2026-11-12 (Supabase `research_sources_structured_tags`).
+
+- New `research_sources` table (preset source list, 15 seeded; RLS public read/insert/update). VSIN and Pickem are separate sources; KAM has `uses_rank`.
+- `research_picks` gains `source_id`, `rank`, `conviction` (`top` rank 1-5, `topish` 6-15), `line_at_tag`, `total_at_tag`, `line_basis` (`tag_time` | `backfill`), `legacy_label`, `split_from`.
+- `BEFORE INSERT` trigger `research_picks_before_insert` derives conviction from rank, rebuilds `source_label` ("KAM #2", "KAM Top"), and stamps the line/total at tag time.
+- Backfill: multi-source labels were split into one row per source (6 extra rows, 325 total, `split_from` points at the original); unattributed labels ("Lean", "Under", ...) kept in `note` and `legacy_label`. Backfilled lines come from the latest signal/games row, not the line at the original tag time (`line_basis = 'backfill'`).
+- Verified in a rolled-back dry run first. No engine change.

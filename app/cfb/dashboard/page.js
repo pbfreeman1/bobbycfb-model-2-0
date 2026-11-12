@@ -7,6 +7,8 @@ import {
   DEFINITIONS, TIER_THRESHOLDS_DISPLAY, defFor,
 } from '../../../lib/bobby-model';
 import { attachBobbyRank } from '../../../lib/bobby-rank';
+import { buildTagPayload, resolveRankInput } from '../../../lib/research-sources';
+import SourcePicker, { useResearchSources } from '../_research/SourcePicker';
 import { shortTeam, teamSearchText } from '../../../lib/team-short';
 import {
   BET_TYPES, validatePick, unitsPL, aggregate, pickDescription, researchDescription, fmtOdds,
@@ -600,10 +602,15 @@ function ResearchPickModal({ game, onClose, onSaved }) {
   const mobile = useIsMobile();
   const [pickType, setPickType] = useState('spread');
   const [pickSide, setPickSide] = useState('home');
-  const [source, setSource] = useState('');
+  const [sourceId, setSourceId] = useState('');
+  const [rank, setRank] = useState('');
+  const [conviction, setConviction] = useState(null);
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [touched, setTouched] = useState(false);
+  const { sources, create } = useResearchSources();
+  const source = sources.find((x) => x.id === sourceId) || null;
+  useEffect(() => { try { const v = localStorage.getItem('research.lastSource'); if (v) setSourceId(v); } catch {} }, []);
 
   const nameFor = (s) => {
     const full = s === 'home' ? game.home_team : game.away_team;
@@ -623,17 +630,18 @@ function ResearchPickModal({ game, onClose, onSaved }) {
   const error = pickType === 'custom'
     ? (note.trim() ? null : 'Describe the bet.')
     : (pickSide ? null : 'Pick a side.');
+  const rankError = resolveRankInput(source, { rank, conviction }).error;
 
   async function handleSave() {
     setTouched(true);
-    if (error) return;
+    if (error || rankError) return;
     setSaving(true);
     try {
+      const body = buildTagPayload({ game, season: 0, week: 0, pickType, pickSide, source, rank, conviction, note });
+      try { if (sourceId) localStorage.setItem('research.lastSource', sourceId); } catch {}
       await onSaved({
-        pick_side: pickType === 'custom' ? null : pickSide,
-        pick_type: pickType,
-        source_label: source.trim() || null,
-        note: note.trim() || null,
+        pick_side: body.pick_side, pick_type: body.pick_type, source_id: body.source_id, rank: body.rank,
+        conviction: body.conviction, source_label: body.source_label, note: body.note,
       });
     } finally { setSaving(false); }
   }
@@ -678,12 +686,15 @@ function ResearchPickModal({ game, onClose, onSaved }) {
       )}
 
       <div>
-        <FieldLabel>Source</FieldLabel>
-        <input style={selStyle} className="bm-input" placeholder="e.g. Action Network" value={source} onChange={(e) => setSource(e.target.value)} />
+        <SourcePicker
+          sources={sources} create={create} value={sourceId} onChange={setSourceId}
+          rank={rank} conviction={conviction} onRank={setRank} onConviction={setConviction}
+          inputStyle={selStyle} labelStyle={{ ...FM, fontSize: 11, color: C.sub, display: 'block', marginBottom: 4, textTransform: 'uppercase' }}
+        />
       </div>
 
-      {touched && error && (
-        <div style={{ ...FM, fontSize: 12.5, color: C.warn, background: `${C.warn}14`, border: `1px solid ${C.warn}`, borderRadius: 6, padding: '10px 12px' }}>{error}</div>
+      {touched && (error || rankError) && (
+        <div style={{ ...FM, fontSize: 12.5, color: C.warn, background: `${C.warn}14`, border: `1px solid ${C.warn}`, borderRadius: 6, padding: '10px 12px' }}>{error || rankError}</div>
       )}
     </FormShell>
   );

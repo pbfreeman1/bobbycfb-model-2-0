@@ -1,6 +1,9 @@
 'use client';
 import { useEffect, useState, useMemo } from 'react';
 import { SUPABASE_URL, SUPABASE_ANON_KEY, sbFetch, getCurrentWeek } from '../../../lib/supabase';
+import { buildTagPayload } from '../../../lib/research-sources';
+import { teamSpread, fmtSigned } from '../../../lib/research-report';
+import SourcePicker, { useResearchSources } from '../_research/SourcePicker';
 
 const SB_HDR = { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' };
 
@@ -17,8 +20,16 @@ export default function Research() {
   const [selGame, setSelGame] = useState('');
   const [pickSide, setPickSide] = useState('home');
   const [pickType, setPickType] = useState('spread');
-  const [source, setSource] = useState('');
+  const [sourceId, setSourceId] = useState('');
+  const [rank, setRank] = useState('');
+  const [conviction, setConviction] = useState(null);
   const [note, setNote] = useState('');
+  const { sources, create } = useResearchSources();
+  const source = sources.find((x) => x.id === sourceId) || null;
+
+  // Remember the last source so a batch of tags from one source is one click each.
+  useEffect(() => { try { const v = localStorage.getItem('research.lastSource'); if (v) setSourceId(v); } catch {} }, []);
+  useEffect(() => { try { if (sourceId) localStorage.setItem('research.lastSource', sourceId); } catch {} }, [sourceId]);
 
   const load = async () => {
     setLoading(true); setError(null);
@@ -44,24 +55,17 @@ export default function Research() {
   async function addTally() {
     const game = games.find(g => g.id === selGame);
     if (!selGame || !game) return;
-    setSaving(true);
+    setSaving(true); setError(null);
     try {
-      await fetch(`${SUPABASE_URL}/rest/v1/research_picks`, {
-        method: 'POST', headers: SB_HDR,
-        body: JSON.stringify({
-          season, week,
-          game_id: game.id,
-          home_team: game.home_team,
-          away_team: game.away_team,
-          pick_side: pickSide,
-          pick_type: pickType,
-          source_label: source.trim() || null,
-          note: note.trim() || null,
-        }),
-      });
-      setSource(''); setNote('');
+      const body = buildTagPayload({ game, season, week, pickType, pickSide, source, rank, conviction, note });
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/research_picks`, { method: 'POST', headers: SB_HDR, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error(`Save failed (${res.status}): ${await res.text().catch(() => '')}`);
+      // Next KAM rank is usually rank + 1, so pre-fill it. Keep source for the next tag.
+      if (source?.uses_rank && body.rank) setRank(String(body.rank + 1));
+      setNote(''); setSelGame('');
       load();
-    } finally { setSaving(false); }
+    } catch (e) { setError(e.message); }
+    finally { setSaving(false); }
   }
 
   async function removeTally(id) {
@@ -95,8 +99,8 @@ export default function Research() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1>🔍 Research Tally</h1>
-        <p>Track picks from your sources — websites, blogs, podcasts. See which plays are most popular.</p>
+        <h1>🔍 Quick Tag</h1>
+        <p>Pick a game, tap a side, choose a source. The line and total at tag time are saved automatically. Finished tagging? Open Play Finder.</p>
       </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 20 }}>
@@ -122,8 +126,8 @@ export default function Research() {
             <select style={inp} value={pickSide} onChange={e => setPickSide(e.target.value)}>
               {selectedGame ? (
                 <>
-                  <option value="home">{selectedGame.home_team} (Home)</option>
-                  <option value="away">{selectedGame.away_team} (Away)</option>
+                  <option value="home">{selectedGame.home_team} {fmtSigned(teamSpread(selectedGame.current_line, 'home'))}</option>
+                  <option value="away">{selectedGame.away_team} {fmtSigned(teamSpread(selectedGame.current_line, 'away'))}</option>
                   <option value="over">Over {selectedGame.over_under ?? ''}</option>
                   <option value="under">Under {selectedGame.over_under ?? ''}</option>
                 </>
@@ -139,14 +143,17 @@ export default function Research() {
           </div>
           <div>
             <label style={lbl}>Type</label>
-            <select style={inp} value={pickType} onChange={e => setPickType(e.target.value)}>
+            <select style={inp} value={pickType} onChange={e => { const t = e.target.value; setPickType(t); setPickSide(t === 'total' ? 'over' : 'home'); }}>
               <option value="spread">Spread (ATS)</option>
               <option value="total">Total (O/U)</option>
             </select>
           </div>
-          <div style={{ flex: 1, minWidth: 130 }}>
-            <label style={lbl}>Source</label>
-            <input style={inp} placeholder="e.g. Action Network" value={source} onChange={e => setSource(e.target.value)} />
+          <div style={{ flex: 3, minWidth: 260 }}>
+            <SourcePicker
+              sources={sources} create={create} value={sourceId} onChange={setSourceId}
+              rank={rank} conviction={conviction} onRank={setRank} onConviction={setConviction}
+              inputStyle={inp} labelStyle={lbl}
+            />
           </div>
           <div style={{ flex: 1, minWidth: 120 }}>
             <label style={lbl}>Note</label>
