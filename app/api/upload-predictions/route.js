@@ -50,7 +50,7 @@ export async function POST(req) {
     // Load this week's games indexed by matchKey
     const { data: dbGames, error: gErr } = await supabase
       .from('games')
-      .select('id, home_team, away_team')
+      .select('id, home_team, away_team, kickoff_at')
       .eq('season', season)
       .eq('week', week);
     if (gErr) throw new Error(`games: ${gErr.message}`);
@@ -72,6 +72,7 @@ export async function POST(req) {
 
     let gamesMatched = 0, predictionsWritten = 0, gamesUnmatched = [];
     const openingLineUpdates = [];
+    const ptLineUpdates = [];
 
     // Columns to skip — not individual model predictions
     const SKIP_COLS = new Set([
@@ -96,6 +97,15 @@ export async function POST(req) {
         if (!isNaN(openVal)) {
           openingLineUpdates.push({ id: dbGame.id, opening_line: openVal });
         }
+      }
+
+      // PT's line is the line these predictions were made against. Freeze it on
+      // games.pt_line for games that have not started (a DB trigger also refuses
+      // changes once a game has kicked off).
+      if (cols[lineIdx] != null && cols[lineIdx].trim() !== '') {
+        const ptVal = parseFloat(cols[lineIdx].trim());
+        const started = dbGame.kickoff_at && new Date(dbGame.kickoff_at) <= new Date();
+        if (!isNaN(ptVal) && !started) ptLineUpdates.push({ id: dbGame.id, pt_line: ptVal });
       }
 
       // Build one raw_predictions row per model column
@@ -128,6 +138,10 @@ export async function POST(req) {
       await supabase.from('games').update({ opening_line }).eq('id', id);
     }
 
+    for (const { id, pt_line } of ptLineUpdates) {
+      await supabase.from('games').update({ pt_line }).eq('id', id);
+    }
+
     // Upsert raw_predictions in chunks to stay under PostgREST payload limits
     const CHUNK = 500;
     for (let i = 0; i < rawPredRows.length; i += CHUNK) {
@@ -144,6 +158,7 @@ export async function POST(req) {
       games_matched: gamesMatched,
       predictions_written: predictionsWritten,
       opening_lines_written: openingLineUpdates.length,
+      pt_lines_written: ptLineUpdates.length,
       unmatched: gamesUnmatched,
     });
   } catch (e) {

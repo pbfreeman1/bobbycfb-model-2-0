@@ -150,3 +150,13 @@ Applied 2026-11-12 (Supabase `research_sources_structured_tags`).
 - `BEFORE INSERT` trigger `research_picks_before_insert` derives conviction from rank, rebuilds `source_label` ("KAM #2", "KAM Top"), and stamps the line/total at tag time.
 - Backfill: multi-source labels were split into one row per source (6 extra rows, 325 total, `split_from` points at the original); unattributed labels ("Lean", "Under", ...) kept in `note` and `legacy_label`. Backfilled lines come from the latest signal/games row, not the line at the original tag time (`line_basis = 'backfill'`).
 - Verified in a rolled-back dry run first. No engine change.
+
+## 20261112000200_cfb_pt_line_and_stale_flag
+
+Applied 2026-11-12 (Supabase `cfb_pt_line_and_stale_flag`). Engine change; see the file header.
+
+- `games.pt_line` / `pt_line_at`: PredictionTracker's `line`, frozen at ingest, locked at kickoff by trigger `trg_games_lock_pt_line` (set `cfb.force = 'on'` to repair). The results sync never writes it. 549 started games were backfilled from `cfb_game_signals.vegas_line`.
+- `cfb_ingest_predictions` sets `pt_line` from the row's `line` (send it top-level on each row; inside `preds` it also works but registers a junk `line` model with status `verify`). `/api/upload-predictions` sets it too.
+- `cfb_compute` and `cfb_recalibrate` use `coalesce(pt_line, current_line)`. `cfb_grade` is unchanged (it already uses the frozen signal line). New display-only flag `Stale line` when `pt_line` and `current_line` differ by `stale_line` (3) points or flip sign. No tier effect.
+- Dry-run results (rolled back first): recomputing week 11 gave 0 differences in tier/units/side/line/edge on all 64 signals; recalibrated weights identical (max abs diff 0, no model crossed zero; ATS win/loss counts moved for 42 models, which is irrelevant at `w_ats = 0`); a test game with `pt_line = current + 4` used the PT line and got the flag; updating a started game's `pt_line` was refused; the ingest RPC set `pt_line` on an unstarted game and skipped a started one.
+- `/api/grade`, `/api/compute` and the PSS routes (older models) still read `games.current_line` and were not changed.
