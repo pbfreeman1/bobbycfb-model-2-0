@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { buildExtractionRequest, htmlToArticleText, isAllowedUrl, resolvePicks, MAX_ARTICLE_CHARS } from '../../../lib/article-import';
 import { looksLikePickSheet, resolveSheetPicks } from '../../../lib/sportsline-sheet';
+import { looksLikeExpertPicks, resolveExpertPicks } from '../../../lib/sportsline-experts';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -54,6 +55,17 @@ export async function POST(req) {
       return Response.json({
         ok: true, mode: 'sportsline-sheet', rawCount: picks.length, stopReason: null, chars: String(body.text).length,
         preview: `SportsLine pick sheet: ${rows} games read, A/A+ simulation picks only.`, truncated: false, model: null, usage: null,
+        picks: picks.map((p) => ({ game_id: p.game.id, type: p.type, side: p.side, line: p.line, experts: p.experts, text: p.text })),
+        skipped,
+      });
+    }
+
+    // 2c. SportsLine's Expert Picks tab: one card per expert, parsed directly.
+    if (body.text && /sportsline/i.test(String(body.sourceName || '')) && looksLikeExpertPicks(body.text)) {
+      const { picks, skipped, cards } = resolveExpertPicks(String(body.text), games);
+      return Response.json({
+        ok: true, mode: 'sportsline-experts', rawCount: picks.length, stopReason: null, chars: String(body.text).length,
+        preview: `SportsLine expert picks: ${cards} cards read.`, truncated: false, model: null, usage: null,
         picks: picks.map((p) => ({ game_id: p.game.id, type: p.type, side: p.side, line: p.line, experts: p.experts, text: p.text })),
         skipped,
       });

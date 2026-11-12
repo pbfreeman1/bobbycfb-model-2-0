@@ -38,3 +38,6 @@ Vercel env vars: `ANTHROPIC_API_KEY` (required), `IMPORT_PASSCODE` (optional but
 
 ### SportsLine pick sheet
 Source SportsLine + "Paste article text" with the whole page from sportsline.com/college-football/picks/ (select all, copy). The importer reads the table directly (no model call) and tags the **A and A+** simulation picks: spreads and totals become tags labelled `SportsLine - Model A` / `SportsLine - Model A+`; moneyline picks are listed as not tagged. B and C grades are ignored. The "expert picks" count column is not used yet.
+
+### SportsLine expert picks tab
+Source SportsLine + paste the whole Expert Picks tab. Each card becomes a tag labelled `SportsLine - <expert>` (spread and over/under picks; moneylines listed as not tagged). Cards name teams by nickname, resolved through a nickname table in `lib/sportsline-experts.js`; a card whose game can't be matched is listed as not tagged with the nicknames shown, so add the nickname to the table if one is missing.
