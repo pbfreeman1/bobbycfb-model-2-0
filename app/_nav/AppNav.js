@@ -39,7 +39,6 @@ export default function AppNav() {
 
   return (
     <>
-      <style global jsx>{NAV_CSS}</style>
       <header className="bm-top">
         <div className="bm-row1">
           <a href="/" className="bm-logo">Bobby<span>Models</span></a>
@@ -115,11 +114,11 @@ export default function AppNav() {
   );
 }
 
-const NAV_CSS = `
+export const NAV_CSS = `
   .bm-top { background: #0f1219; border-bottom: 1px solid #1e2535; }
   .bm-row1 { display: flex; align-items: center; gap: 14px; height: 56px; padding: 0 20px; }
   .bm-spacer { flex: 1; }
-  .bm-logo { font-size: 18px; font-weight: 800; letter-spacing: -0.3px; color: #e6e9ef; text-decoration: none; }
+  .bm-logo { font-family: 'Space Grotesk', 'Inter', sans-serif; font-size: 19px; font-weight: 700; letter-spacing: -0.02em; color: #e6e9ef; text-decoration: none; }
   .bm-logo span { color: #38bd94; }
   .bm-logo:hover { text-decoration: none; }
 
@@ -141,7 +140,7 @@ const NAV_CSS = `
 
   /* Dropdowns (sport chip on mobile, More menu everywhere) */
   details.bm-dd { position: relative; }
-  details.bm-dd > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: center; min-height: 40px; min-width: 40px; padding: 0 12px; border: 1px solid #1e2535; border-radius: 8px; background: #131722; color: #e6e9ef; font-size: 14px; font-weight: 700; user-select: none; }
+  details.bm-dd > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; min-width: 40px; padding: 0 12px; border: 1px solid #1e2535; border-radius: 8px; background: #131722; color: #e6e9ef; font-size: 14px; font-weight: 700; user-select: none; }
   details.bm-dd > summary::-webkit-details-marker { display: none; }
   details.bm-more > summary { font-size: 20px; line-height: 1; padding: 0 12px 4px; }
   details.bm-dd > summary.on { color: #38bd94; border-color: #38bd94; }
