@@ -716,6 +716,11 @@ function GameCard({
   const [note, setNote] = useState('');
   const [savingNote, setSavingNote] = useState(false);
   const toggleDef = (k) => setDefKey((prev) => (prev === k ? null : k));
+  // Phone layout: a compact card (matchup, pick, three stats). Everything else
+  // sits one tap deeper, in the expanded view or the add sheet.
+  const isMobile = useIsMobile();
+  const [addOpen, setAddOpen] = useState(false);
+  const [showResearch, setShowResearch] = useState(false);
 
   const vegasLine = game.current_line != null ? parseFloat(game.current_line) : null;
   const favSide = vegasLine != null && Math.abs(vegasLine) > 0.05 ? (vegasLine > 0 ? 'home' : 'away') : null;
@@ -739,12 +744,12 @@ function GameCard({
       <>
         <TeamMark logoUrl={logos[away]} name={away} />
         <span className={isProbe ? undefined : 'bm-team'} style={nameStyle} {...(isProbe ? {} : teamAttrs(away, a))}>
-          {a}{favSide === 'away' && <span style={{ color: C.sub, fontWeight: 400 }}> (-{Math.abs(vegasLine).toFixed(1)})</span>}
+          {a}{favSide === 'away' && !isMobile && <span style={{ color: C.sub, fontWeight: 400 }}> (-{Math.abs(vegasLine).toFixed(1)})</span>}
         </span>
         <span style={{ color: C.sub, fontSize: 12, flexShrink: 0 }}>@</span>
         <TeamMark logoUrl={logos[home]} name={home} />
         <span className={isProbe ? undefined : 'bm-team'} style={nameStyle} {...(isProbe ? {} : teamAttrs(home, h))}>
-          {h}{favSide === 'home' && <span style={{ color: C.sub, fontWeight: 400 }}> (-{Math.abs(vegasLine).toFixed(1)})</span>}
+          {h}{favSide === 'home' && !isMobile && <span style={{ color: C.sub, fontWeight: 400 }}> (-{Math.abs(vegasLine).toFixed(1)})</span>}
         </span>
       </>
     );
@@ -877,6 +882,7 @@ function GameCard({
       }}>
         <div style={{ display: 'flex', alignItems: 'stretch' }}>
           <div style={{ flexGrow: 1, minWidth: 0 }}>
+            {!isMobile ? (<>
             {/* Row 1 — matchup. Full names by default; the card falls back to
                 short names only when the full pair cannot fit. */}
             <div className="bm-match-row" style={{ padding: '14px 16px 10px' }}>
@@ -976,6 +982,95 @@ function GameCard({
                 <Badge as="button" onClick={onOpenResearch} color={C.sub} dashed className="bm-badge-tap">+ Research</Badge>
               </div>
             </div>
+            </>) : (
+            <div style={{ padding: '12px 10px 12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {/* Matchup + tier */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <div ref={boxRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: '1 1 auto' }}>
+                  {teamPair(useShort)}
+                  <div
+                    ref={probeRef}
+                    aria-hidden="true"
+                    style={{
+                      position: 'absolute', top: 0, left: 0, height: 0, overflow: 'hidden', visibility: 'hidden',
+                      pointerEvents: 'none', whiteSpace: 'nowrap', width: 'max-content',
+                      display: 'flex', alignItems: 'center', gap: 6,
+                    }}
+                  >
+                    {teamPair(false, true)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Pick + one add button */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                {signal ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                    <span className="bm-team" style={{ ...FH, fontSize: 19, fontWeight: 700, display: 'inline-block', maxWidth: '100%' }} {...teamAttrs(pickTeam, pickTeamDisp)}>{pickTeamDisp} {teamLine(signal.vegas_line, signal.pick_side)}</span>
+                    <span style={{ ...FM, fontSize: 11.5, color: C.sub }}>BM line {teamLine(signal.consensus, signal.pick_side)}</span>
+                  </div>
+                ) : (
+                  <span style={{ ...FM, fontSize: 12, color: C.sub }}>Not computed yet</span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setAddOpen(true)}
+                  aria-label="Add a pick or research tag"
+                  style={{ width: 44, height: 44, flexShrink: 0, borderRadius: 22, border: `1px dashed ${C.blue}`, background: 'transparent', color: C.blue, fontSize: 22, lineHeight: 1, cursor: 'pointer' }}
+                >+</button>
+              </div>
+
+              {signal && (
+                <div style={{ ...FM, fontSize: 12.5, color: C.sub, display: 'flex', alignItems: 'center', gap: 12, whiteSpace: 'nowrap' }}>
+                  <span>Edge <b style={{ color: C.green }}>+{Math.abs(signal.edge).toFixed(1)}</b></span>
+                  <span>Vote <b style={{ color: C.text, fontWeight: 600 }}>{Math.round(signal.vote_share * 100)}%</b></span>
+                  <span>Conv <b style={{ color: C.text, fontWeight: 600 }}>{signal.conviction.toFixed(2)}</b></span>
+                </div>
+              )}
+
+              <div style={{ ...FM, fontSize: 11.5, color: C.sub, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <span>
+                  {[
+                    game.kickoff_at ? new Date(game.kickoff_at).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' }).replace(',', '') : null,
+                    game.tv_network,
+                    `O/U ${game.over_under != null ? game.over_under : '—'}`,
+                  ].filter(Boolean).join(' · ')}
+                </span>
+                {signal && (
+                  <span style={{ ...FM, flexShrink: 0, fontSize: 11, fontWeight: 700, lineHeight: 1, padding: '4px 8px', borderRadius: 4, color: tier === 'No tier' ? C.sub : TIER_COLOR[tier], border: `1px solid ${tier === 'No tier' ? C.sub : TIER_COLOR[tier]}`, background: `${tier === 'No tier' ? C.sub : TIER_COLOR[tier]}22` }}>{tier}</span>
+                )}
+              </div>
+
+              {(nm || bobcat || split || flags.length > 0 || (picks || []).length > 0 || (research || []).length > 0) && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  {nm && <Badge color={C.gold} dashed>Near miss · {nm}</Badge>}
+                  {bobcat && <Badge color={C.gold}>Bobcat</Badge>}
+                  {split && <Badge color={C.lav} filled>Split {hitCount} vs {hitOpp}</Badge>}
+                  {flags.map((f) => <Badge key={f} color={C.warn} filled>{f}</Badge>)}
+                  {(picks || []).map((p) => (
+                    <Badge key={p.id} as="button" onClick={() => onOpenPick(p)} color={C.blue} filled className="bm-badge-tap" title={p.side === 'home' ? home : p.side === 'away' ? away : (p.custom_label || undefined)}>
+                      MY PLAY · {(parseFloat(p.units) || 1)}u {pickDescription(p, (sd) => (useShort ? shortTeam(sd === 'home' ? home : away) : (sd === 'home' ? home : away)))}
+                    </Badge>
+                  ))}
+                  {(research || []).length > 0 && (
+                    <Badge as="button" onClick={() => setShowResearch((v) => !v)} color={C.sub} className="bm-badge-tap" aria-expanded={showResearch}>
+                      {(research || []).length} research {showResearch ? '▴' : '▾'}
+                    </Badge>
+                  )}
+                </div>
+              )}
+              {showResearch && (research || []).length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  {(research || []).map((r) => (
+                    <Badge key={r.id} color={C.sub} className="bm-badge-tap">
+                      {researchDescription(r, (sd) => (useShort ? shortTeam(sd === 'home' ? home : away) : (sd === 'home' ? home : away)))}{r.source_label ? ` · ${r.source_label}` : ''}
+                      <button onClick={() => onRemoveResearch(r.id)} aria-label="Remove research tag" className="bm-badge-x" style={{ padding: 0, border: 'none', background: 'none', color: C.sub, cursor: 'pointer', fontSize: 14 }}>×</button>
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+            )}
           </div>
           <button onClick={onToggle} aria-expanded={expanded} aria-label="Toggle full breakdown" style={{ width: 44, flexShrink: 0, border: 'none', borderLeft: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transform: expanded ? 'rotate(180deg)' : 'none' }}><polyline points="6 9 12 15 18 9"></polyline></svg>
@@ -983,6 +1078,23 @@ function GameCard({
         </div>
 
         {defKey && <DefBox defKey={defKey} onClose={() => setDefKey(null)} config={config} />}
+
+        {addOpen && (
+          <BottomSheet title={`${away} @ ${home}`} onClose={() => setAddOpen(false)}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <button
+                type="button"
+                onClick={() => { setAddOpen(false); onOpenPick(null); }}
+                style={{ ...FM, fontSize: 14, minHeight: 52, borderRadius: 8, border: `1px dashed ${C.blue}`, background: 'transparent', color: C.blue, cursor: 'pointer' }}
+              >{(picks || []).length ? '+ Add another bet' : '+ Add Bobby Pick'}</button>
+              <button
+                type="button"
+                onClick={() => { setAddOpen(false); onOpenResearch(); }}
+                style={{ ...FM, fontSize: 14, minHeight: 52, borderRadius: 8, border: `1px dashed ${C.sub}`, background: 'transparent', color: C.text, cursor: 'pointer' }}
+              >+ Add research tag</button>
+            </div>
+          </BottomSheet>
+        )}
 
         {expanded && signal && (
           <div style={{ borderTop: `1px solid ${C.border}`, background: C.surface2, padding: 18, display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -1726,9 +1838,16 @@ export default function BobbyModelDashboard() {
           .bm-info { width: 44px; height: 44px; }
           .bm-match-row { flex-direction: column; align-items: stretch; gap: 6px; }
           .bm-match-meta { flex-wrap: wrap; }
+          /* Tier tiles become one row of filter pills: "3U 5", "2U 10"... */
+          .bm-hide-mobile { display: none !important; }
+          .bm-weights { border: none !important; background: none !important; padding: 0 !important; font-size: 11px; width: 100%; }
+          .bm-hdr-actions { display: grid !important; grid-template-columns: 1fr 1fr 1.5fr; width: 100%; gap: 6px !important; }
+          .bm-hdr-actions > button { min-height: 40px !important; padding: 0 6px !important; font-size: 12px !important; white-space: nowrap; }
           .bm-tier-strip { gap: 6px !important; }
-          .bm-tier-strip > button { padding: 8px 6px !important; }
-          .bm-tier-count { font-size: 20px !important; }
+          .bm-tier-strip > button { display: flex !important; align-items: center; justify-content: center; gap: 6px; min-height: 40px !important; padding: 4px 6px !important; border-width: 1px !important; border-color: var(--tc) !important; border-radius: 20px !important; }
+          .bm-tier-strip > button > div:first-child > span:last-child { display: none; }
+          .bm-tier-strip > button > div:first-child { display: block !important; }
+          .bm-tier-count { font-size: 15px !important; font-weight: 700 !important; }
           .bm-tier-sub { display: none !important; }
           .bm-stat-grid { grid-template-columns: repeat(2, 1fr) !important; }
           .bm-detail-grid { grid-template-columns: 1fr !important; }
@@ -1756,20 +1875,20 @@ export default function BobbyModelDashboard() {
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ ...FM, fontSize: 11, color: C.sub, letterSpacing: 1 }}>BOBBYMODELS · CFB</div>
-            <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, letterSpacing: -0.3 }}>THE Bobby Model</h1>
+            <div className="bm-hide-mobile" style={{ ...FM, fontSize: 11, color: C.sub, letterSpacing: 1 }}>BOBBYMODELS · CFB</div>
+            <h1 className="bm-hide-mobile" style={{ margin: 0, fontSize: 26, fontWeight: 700, letterSpacing: -0.3 }}>THE Bobby Model</h1>
             <div style={{ ...FM, fontSize: 12, color: C.sub, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <label htmlFor="season">Season</label>
               <input id="season" type="number" value={season} onChange={(e) => setSeason(parseInt(e.target.value) || season)} style={{ ...FM, fontSize: 12, width: 72, minHeight: 32, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, color: C.text, padding: '0 8px' }} />
               <label htmlFor="week">Week</label>
               <input id="week" type="number" value={week ?? ''} onChange={(e) => setWeek(parseInt(e.target.value) || week)} style={{ ...FM, fontSize: 12, width: 52, minHeight: 32, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, color: C.text, padding: '0 8px' }} />
-              <span style={{ padding: '5px 10px', border: `1px solid ${C.border}`, borderRadius: 4, background: C.surface, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span className="bm-weights" style={{ padding: '5px 10px', border: `1px solid ${C.border}`, borderRadius: 4, background: C.surface, display: 'flex', alignItems: 'center', gap: 4 }}>
                 Weights as of Week {week} · {votingCount} of {totalSystems ?? '—'} systems voting
                 <InfoIcon defKey="weight" active={headerTip === 'weight'} onToggle={(k) => setHeaderTip((p) => p === k ? null : k)} />
               </span>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div className="bm-hdr-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button onClick={() => setShowLegend(true)} style={{ ...FM, fontSize: 12, minHeight: 40, padding: '0 14px', borderRadius: 4, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer' }}>? How to use</button>
             <button onClick={() => { setCardTab('season'); setShowCard(true); }} style={{ ...FM, fontSize: 12, minHeight: 40, padding: '0 14px', borderRadius: 4, border: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer' }}>Season stats</button>
             <button onClick={() => { setCardTab('week'); setShowCard(true); }} style={{ ...FM, fontSize: 12, fontWeight: 700, minHeight: 40, padding: '0 16px', borderRadius: 4, border: `1px solid ${C.gold}`, background: `${C.gold}1A`, color: C.gold, cursor: 'pointer' }}>My card · {myPlaysThisWeek} plays</button>
@@ -1802,6 +1921,7 @@ export default function BobbyModelDashboard() {
                   background: on ? `${TIER_COLOR[t]}1F` : C.surface,
                   border: `${on ? 2 : 1}px solid ${on ? TIER_COLOR[t] : C.border}`,
                   borderTop: `3px solid ${TIER_COLOR[t]}`,
+                  '--tc': TIER_COLOR[t],
                   borderRadius: 6, padding: '10px 14px',
                 }}
               >
