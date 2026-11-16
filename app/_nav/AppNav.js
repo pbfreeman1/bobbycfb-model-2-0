@@ -66,7 +66,7 @@ export default function AppNav() {
 
           <div className="bm-spacer" />
 
-          {cfg && (
+          {cfg && cfg.more.length > 0 && (
             <details className="bm-dd bm-more">
               <summary aria-label="More pages" className={inMore ? 'on' : ''}>⋯</summary>
               <div className="bm-menu bm-menu-right">
