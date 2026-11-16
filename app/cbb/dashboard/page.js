@@ -7,8 +7,9 @@
 // This is a tracking and research surface with paper units.
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
+import RefreshButton from '../_ui/RefreshButton';
 import {
-  C, FH, FM, TIER_COLOR, f1, fmtDay, lastRun, latestBoardDate, loadBoard, shiftDate, spreadFor, todayET, units,
+  C, FH, FM, TIER_COLOR, f1, fmtDay, fmtET, lastRun, latestBoardDate, loadBoard, shiftDate, spreadFor, todayET, units,
 } from '../../../lib/cbb';
 
 const SORTS = {
@@ -107,6 +108,9 @@ export default function CbbDashboard() {
     lastRun().then(setRun).catch(() => {});
   }, []);
 
+  const [tick, setTick] = useState(0);
+  const onRefreshed = (r) => { setRun(r); setTick((t) => t + 1); };
+
   useEffect(() => {
     if (!date) return;
     let live = true;
@@ -117,7 +121,7 @@ export default function CbbDashboard() {
       .catch((e) => { if (live) setError(e.message); })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [date]);
+  }, [date, tick]);
 
   const plays = useMemo(() => rows.filter((r) => r.tier === 'Play'), [rows]);
   const top = useMemo(() => [...plays].sort(SORTS.rank.fn).slice(0, 5), [plays]);
@@ -126,7 +130,7 @@ export default function CbbDashboard() {
     return [...base].sort(SORTS[sort].fn);
   }, [rows, sort, tierFilter]);
 
-  const live = run && run.detail && run.detail.live;
+  
   const leans = rows.filter((r) => r.tier === 'Lean').length;
   const graded = plays.filter((r) => r.result === 'W' || r.result === 'L');
   const pw = graded.filter((r) => r.result === 'W').length;
@@ -141,10 +145,11 @@ export default function CbbDashboard() {
       <div style={{ ...FM, fontSize: 11.5, color: C.sub, marginBottom: 14 }}>
         {run ? (
           <>
-            Last pull {new Date(run.started_at).toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric' })} ET
-            {' · '}{run.status === 'ok' ? 'ok' : <span style={{ color: C.warn }}>error: {run.detail && run.detail.error}</span>}
-            {live && live.page_stamp ? ` · PredictionTracker: ${live.page_stamp}` : ''}
-            {live && live.status === 'stale' ? ' · PredictionTracker has not posted today yet' : ''}
+            Last pull {fmtET(run.started_at)} ET ({run.trigger})
+            {' · '}{run.status === 'error' ? <span style={{ color: C.warn }}>error: {run.error}</span> : run.status}
+            {run.page_stamp ? ` · PredictionTracker: ${run.page_stamp}` : ''}
+            {run.live_status === 'stale' ? ' · PredictionTracker has not posted today yet' : ''}
+            {' · '}<a href="/cbb/log">pull log</a>
           </>
         ) : 'Checking last pull…'}
       </div>
@@ -155,6 +160,7 @@ export default function CbbDashboard() {
           style={{ ...btn, colorScheme: 'dark' }} />
         <button style={btn} onClick={() => setDate(shiftDate(date, 1))} aria-label="Next day">→</button>
         <button style={btn} onClick={() => setDate(todayET())}>Today</button>
+        <RefreshButton onDone={onRefreshed} />
         <span style={{ ...FM, fontSize: 12, color: C.sub, marginLeft: 6 }}>
           {rows.length} games · {plays.length} plays · {leans} leans
           {graded.length ? ` · plays ${pw}-${graded.length - pw} (${units(pu)})` : ''}

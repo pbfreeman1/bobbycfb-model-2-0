@@ -75,6 +75,10 @@ export const NAV_BY_SPORT = {
         { href: '/cbb/results', label: 'Results' },
       ] },
     ],
-    more: [],
+    more: [
+      { group: 'Admin', items: [
+        { href: '/cbb/log', label: 'Pull Log' },
+      ] },
+    ],
   },
 };

@@ -23,6 +23,11 @@ Every run is logged in `cbb_runs` (status + detail JSON). Line and prediction ch
 
 **Lock:** PT publishes no tip times, so lines, predictions and signals freeze at noon ET on game day (`lock_hour_et` in `cbb_config`). Games that first appear after the lock are added and computed once.
 
+## Pull log and manual refresh
+- `/cbb/log` lists the last 100 cycles (view `cbb_run_log`): start time, scheduled or manual, status, PT page stamp, games, new games, lines moved, predictions added/changed, scores added, graded, error.
+- "Refresh now" (dashboard and log page) calls `cbb_request_refresh()`, which only queues a request in `cbb_refresh_requests`. A pg_cron job (`cbb-run-pending`, every minute) runs the cycle, so it starts within 60 seconds. Requests are refused if a pull ran in the last 2 minutes.
+- A manual refresh follows the same lock as a scheduled one.
+
 ## The calculation
 - **Weights** (same as football model B): each system's mean absolute error this season vs the median system. Weight = `max(0, (median - mae) / median)`, so only the better half carry weight. A system needs 50 graded games. If fewer than 3 systems qualify (season start), last season is blended in.
 - **Consensus** = weighted average of the weighted systems. **Edge** = consensus − line. **Vote share** = share of weight on the consensus side. **SD** = weighted spread of the systems. **Coverage** = share of total weight present on the game.
@@ -48,7 +53,7 @@ Treat this as a tracker with paper units until the forward record says otherwise
 Tables: `cbb_config`, `cbb_systems`, `cbb_header_alias`, `cbb_games`, `cbb_predictions`, `cbb_prediction_history`, `cbb_line_history`, `cbb_system_weights`, `cbb_signals`, `cbb_signal_grades`, `cbb_runs`. All have RLS with public read.
 Views (read by the app): `cbb_board`, `cbb_results_daily`, `cbb_system_board`.
 Functions (not callable with the anon key): `cbb_cycle`, `cbb_ingest_live`, `cbb_load_archive`, `cbb_recalibrate`, `cbb_compute`, `cbb_grade`.
-Migrations in Supabase history: `cbb_enable_http_cron`, `cbb_core_schema`, `cbb_load_archive_fn`, `cbb_engine`, `cbb_ingest_cycle`, `cbb_views`.
+Migrations in Supabase history: `cbb_enable_http_cron`, `cbb_core_schema`, `cbb_load_archive_fn`, `cbb_engine`, `cbb_ingest_cycle`, `cbb_views`, `cbb_manual_refresh_and_log`.
 
 ## Handy SQL
 ```sql
@@ -63,4 +68,4 @@ update cbb_systems set status = 'include' where col = 'linenew';                
 - New systems (agatha.gg, Sharp Edge, Model Edge Sports) are not in PT's season file, so they only start earning weight from live captures (50 games, a few days).
 - Postponed games never get a score and stay ungraded.
 - The backfilled record uses PT's final line; the forward record uses the line frozen at noon ET.
-- App pages: `/cbb/dashboard`, `/cbb/results`.
+- App pages: `/cbb/dashboard`, `/cbb/results`, `/cbb/log`.
