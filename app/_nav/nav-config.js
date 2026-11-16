@@ -11,7 +11,7 @@
 export const SPORTS = [
   { key: 'cfb', label: 'CFB', name: 'College Football', prefix: '/cfb', home: '/cfb/dashboard' },
   { key: 'nfl', label: 'NFL', name: 'Pro Football', prefix: '/nfl', home: '/nfl/dashboard' },
-  // { key: 'cbb', label: 'CBB', name: 'College Basketball', prefix: '/cbb', home: '/cbb/dashboard' },
+  { key: 'cbb', label: 'CBB', name: 'College Basketball', prefix: '/cbb', home: '/cbb/dashboard' },
   // { key: 'nba', label: 'NBA', name: 'Pro Basketball', prefix: '/nba', home: '/nba/dashboard' },
 ];
 
@@ -65,5 +65,16 @@ export const NAV_BY_SPORT = {
         { href: '/nfl/ingest', label: 'Ingest' },
       ] },
     ],
+  },
+  cbb: {
+    tabs: [
+      { key: 'board', label: 'Board', icon: 'board', pages: [
+        { href: '/cbb/dashboard', label: 'Daily Board' },
+      ] },
+      { key: 'results', label: 'Results', icon: 'results', pages: [
+        { href: '/cbb/results', label: 'Results' },
+      ] },
+    ],
+    more: [],
   },
 };
