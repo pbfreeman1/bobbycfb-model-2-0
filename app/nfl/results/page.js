@@ -1,371 +1,170 @@
 'use client';
 
-// /nfl/results — the graded record, by week and by pick.
-//
-// Reads nfl_bobby_pick_grades, which nfl_grade writes. A pick only appears here
-// once its game is final AND Grade has been run for that week; a computed but
-// ungraded week shows as pending rather than silently missing, because
-// "0 picks" and "16 picks nobody has graded yet" are very different states and
-// the difference is the first thing you want to know when a number looks wrong.
-//
-// Units are paper units at the stored tier size. Tier cutoffs are still the
-// CFB carry-over numbers, so treat the P/L column as a record of what the
-// engine said, not as a result. Tracking and research only; nothing here is
-// advice.
+// NFL results: paper-unit record of taken Plays, top spots, leans and the model
+// side on every game, by week, plus the current system weights.
+// Forward = computed live before kickoff; Backfill = rebuilt from
+// PredictionTracker's season files and scored at the opening line.
 
 import { useEffect, useMemo, useState } from 'react';
-import { sbFetchAll, fmtKickoff } from '../../../lib/supabase';
-import { TIER_COLOR } from '../../../lib/bobby-model';
-import {
-  C, FH, FM, sel, SEASONS, MARKET, Badge, isPreRegistered,
-} from '../../../lib/nfl-board';
+import { sbFetchAll } from '../../../lib/supabase';
+import { C, FH, FM, MARKETS, f1, pct, signed, units } from '../../../lib/nfl2';
 
-const MARKETS = ['spread', 'total'];
+const cell = { padding: '8px 10px', borderBottom: `1px solid ${C.border}`, fontSize: 13, whiteSpace: 'nowrap' };
+const head = { ...cell, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.05em', color: C.sub, textAlign: 'left' };
+const n = (v) => Number(v || 0);
+const btnStyle = (on) => ({
+  background: C.surface, border: `1px solid ${on ? C.green : C.border}`, color: C.text,
+  borderRadius: 6, padding: '5px 11px', fontSize: 12, cursor: 'pointer',
+});
+const KEYS = ['play_w', 'play_l', 'play_p', 'play_units', 'top_w', 'top_l', 'top_units', 'lean_w', 'lean_l', 'clv_n', 'clv_sum', 'clv_beat'];
 
-function useResults(season, market) {
-  const [state, setState] = useState({ loading: true, error: null, picks: [], games: {}, grades: {} });
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setState((s) => ({ ...s, loading: true, error: null }));
-      try {
-        const picks = await sbFetchAll(
-          `nfl_bobby_picks?select=id,game_id,week,market,tier,units,pick_side,line_used,consensus,edge,` +
-          `agreement,locked_at,computed_at&market=eq.${market}&season=eq.${season}&order=week.asc`
-        );
-
-        const gameIds = [...new Set(picks.map((p) => p.game_id))];
-        const pickIds = picks.map((p) => p.id);
-
-        const [gameRows, gradeRows] = await Promise.all([
-          gameIds.length
-            ? sbFetchAll(
-                `nfl_games?select=id,week,home_team,away_team,game_date,home_score,away_score,` +
-                `completed,spread_line,total_line&id=in.(${gameIds.join(',')})`
-              )
-            : Promise.resolve([]),
-          pickIds.length
-            ? sbFetchAll(
-                `nfl_bobby_pick_grades?select=pick_id,result,margin_vs_line,units_pl,closing_line,` +
-                `clv,clv_open,clv_first,beat_close,graded_at&pick_id=in.(${pickIds.join(',')})`
-              )
-            : Promise.resolve([]),
-        ]);
-
-        const games = {};
-        for (const g of gameRows) games[g.id] = g;
-        const grades = {};
-        for (const gr of gradeRows) grades[gr.pick_id] = gr;
-
-        if (!cancelled) setState({ loading: false, error: null, picks, games, grades });
-      } catch (e) {
-        if (!cancelled) setState((s) => ({ ...s, loading: false, error: String(e.message || e) }));
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [season, market]);
-
-  return state;
+function sum(rows) {
+  const t = Object.fromEntries(KEYS.map((k) => [k, 0]));
+  rows.forEach((r) => KEYS.forEach((k) => { t[k] += n(r[k]); }));
+  return t;
 }
 
-// nfl_grade stores result as 'win' | 'loss' | 'push'. Normalised here rather
-// than compared inline, so a stray casing or an added value shows up as
-// unknown instead of silently counting as a loss.
-const RESULT = { win: 'W', loss: 'L', push: 'P' };
-const norm = (r) => RESULT[String(r || '').toLowerCase()] || null;
-
-// One row per week, plus a season total. Pushes are excluded from the win
-// percentage denominator, which is the standard ATS convention.
-function summarise(picks, grades, games) {
-  const byWeek = new Map();
-  const blank = (week) => ({
-    week, picks: 0, tiered: 0, graded: 0, pending: 0,
-    w: 0, l: 0, p: 0, units: 0, clvSum: 0, clvN: 0, beatClose: 0, backfill: 0,
-  });
-
-  for (const pick of picks) {
-    if (!byWeek.has(pick.week)) byWeek.set(pick.week, blank(pick.week));
-    const row = byWeek.get(pick.week);
-    row.picks++;
-    const tiered = pick.tier !== 'No tier';
-    if (tiered) row.tiered++;
-    if (isPreRegistered(pick, games[pick.game_id]) === false) row.backfill++;
-
-    const g = grades[pick.id];
-    // Only tiered picks carry units, so only they move the P/L. Untiered picks
-    // are still graded for the record.
-    if (!g) {
-      const game = games[pick.game_id];
-      if (game?.completed) row.pending++;
-      continue;
-    }
-    row.graded++;
-    const res = norm(g.result);
-    if (res === 'W') row.w++;
-    else if (res === 'L') row.l++;
-    else if (res === 'P') row.p++;
-    if (g.units_pl != null) row.units += parseFloat(g.units_pl);
-    if (g.clv != null) { row.clvSum += parseFloat(g.clv); row.clvN++; }
-    if (g.beat_close) row.beatClose++;
-  }
-
-  const weeks = [...byWeek.values()].sort((a, b) => a.week - b.week);
-  const total = weeks.reduce((t, r) => {
-    for (const k of ['picks', 'tiered', 'graded', 'pending', 'w', 'l', 'p', 'clvN', 'beatClose', 'backfill']) t[k] += r[k];
-    t.units += r.units; t.clvSum += r.clvSum;
-    return t;
-  }, { ...blank('Total') });
-
-  return { weeks, total };
+function Stat({ label, w, l, u, note }) {
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: '12px 14px' }}>
+      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.05em', color: C.sub }}>{label}</div>
+      <div style={{ ...FH, fontSize: 20, fontWeight: 700, margin: '2px 0' }}>{w}-{l} <span style={{ fontSize: 13, color: C.sub }}>{pct(w, l)}</span></div>
+      <div style={{ ...FM, fontSize: 12, color: u === undefined ? C.sub : u >= 0 ? C.green : C.warn }}>
+        {u === undefined ? note : units(u)}
+      </div>
+    </div>
+  );
 }
-
-const pct = (w, l) => {
-  const d = w + l;
-  return d ? `${((w / d) * 100).toFixed(1)}%` : '—';
-};
-const signed = (n, digits = 2) => {
-  const v = parseFloat(n);
-  if (!Number.isFinite(v)) return '—';
-  return `${v > 0 ? '+' : ''}${v.toFixed(digits)}`;
-};
-const unitColor = (n) => (n > 0.001 ? C.green : n < -0.001 ? C.warn : C.sub);
 
 export default function NflResults() {
-  const [season, setSeason] = useState(2026);
+  const [weekly, setWeekly] = useState([]);
+  const [all, setAll] = useState([]);
+  const [systems, setSystems] = useState([]);
   const [market, setMarket] = useState('spread');
-  const { loading, error, picks, games, grades } = useResults(season, market);
-  const { weeks, total } = useMemo(() => summarise(picks, grades, games), [picks, grades, games]);
-  const [openWeek, setOpenWeek] = useState(null);
+  const [scope, setScope] = useState('all');
+  const [season, setSeason] = useState('2026');
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  const anyGraded = total.graded > 0;
+  useEffect(() => {
+    Promise.all([
+      sbFetchAll('nfl2_results_weekly?order=season.desc,week.desc'),
+      sbFetchAll('nfl2_results_all_games?order=season.desc,week.desc'),
+      sbFetchAll('nfl2_system_board?order=rank.asc'),
+    ]).then(([w, a, s]) => { setWeekly(w); setAll(a); setSystems(s); })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const seasons = useMemo(() => [...new Set(weekly.map((r) => r.season))].sort((a, b) => b - a), [weekly]);
+  const inSeason = (r) => (season === 'since2022' ? r.season >= 2022 : String(r.season) === season);
+  const rows = useMemo(() => weekly.filter((r) => r.market === market && inSeason(r)
+    && (scope === 'all' || r.source === scope)), [weekly, market, scope, season]); // eslint-disable-line react-hooks/exhaustive-deps
+  const allRows = useMemo(() => all.filter((r) => r.market === market && inSeason(r)), [all, market, season]); // eslint-disable-line react-hooks/exhaustive-deps
+  const t = useMemo(() => sum(rows), [rows]);
+  const side = useMemo(() => allRows.reduce((a, r) => ({ w: a.w + n(r.w), l: a.l + n(r.l) }), { w: 0, l: 0 }), [allRows]);
+  const byWeek = useMemo(() => {
+    const m = new Map();
+    rows.forEach((r) => { const k = `${r.season}-${r.week}`; m.set(k, [...(m.get(k) || []), r]); });
+    return [...m.entries()].map(([k, rs]) => {
+      const [s, w] = k.split('-').map(Number);
+      const ag = allRows.find((x) => x.season === s && x.week === w) || {};
+      return { s, w, src: [...new Set(rs.map((x) => x.source))].join('/'), ...sum(rs), aw: n(ag.w), al: n(ag.l) };
+    });
+  }, [rows, allRows]);
+  const sys = systems.filter((s) => s.market === market);
+  const asOf = sys[0];
 
   return (
-    <main style={{ maxWidth: 1080, margin: '0 auto', padding: '20px 16px 64px', color: C.text }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
-        <h1 style={{ ...FH, fontSize: 21, margin: 0 }}>THE Bobby Model — NFL results</h1>
-        <span style={{ ...FM, fontSize: 12, color: C.sub }}>
-          {MARKET[market].label} · {season}
-        </span>
+    <main style={{ maxWidth: 1080, margin: '0 auto', padding: '20px 16px 72px', color: C.text }}>
+      <h1 style={{ ...FH, fontSize: 21, margin: '0 0 12px' }}>NFL — Results</h1>
+      {error && <div className="error-msg">{error}</div>}
+      {loading && <div className="loading">Loading…</div>}
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+        {Object.values(MARKETS).map((m) => (
+          <button key={m.key} onClick={() => setMarket(m.key)} style={{ ...btnStyle(market === m.key), fontWeight: 700, padding: '6px 14px' }}>{m.label}</button>
+        ))}
+        <span style={{ width: 10 }} />
+        {[['all', 'All'], ['live', 'Forward (live)'], ['archive', 'Backfill']].map(([k, label]) => (
+          <button key={k} onClick={() => setScope(k)} style={btnStyle(scope === k)}>{label}</button>
+        ))}
+        <span style={{ width: 10 }} />
+        <select value={season} onChange={(e) => setSeason(e.target.value)} style={{ ...btnStyle(false), colorScheme: 'dark' }}>
+          {seasons.map((s) => <option key={s} value={String(s)}>{s}</option>)}
+          <option value="since2022">2022 to now</option>
+        </select>
       </div>
-      <p style={{ ...FM, fontSize: 11.5, color: C.sub, lineHeight: 1.6, margin: '0 0 14px', maxWidth: 760 }}>
-        What the engine said, after the fact. Paper units at the stored tier size; the tier cutoffs
-        are still the CFB carry-over numbers, so read this as a record of the engine's output, not
-        as a result.
-      </p>
+      {scope !== 'live' && (
+        <p style={{ fontSize: 12, color: C.sub, margin: '0 0 12px', maxWidth: 820, lineHeight: 1.6 }}>
+          Backfill rows are rebuilt from PredictionTracker&rsquo;s season files and scored at the opening line, standing in for an
+          early-week pull. Those files hold each system&rsquo;s final number for the week, which flatters the record. Forward rows are the real test.
+        </p>
+      )}
 
-      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', margin: '0 0 16px' }}>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={{ ...FM, fontSize: 10.5, color: C.sub, letterSpacing: 0.4 }}>SEASON</span>
-          <select value={season} onChange={(e) => setSeason(+e.target.value)} style={sel}>
-            {SEASONS.map((y) => <option key={y} value={y}>{y}</option>)}
-          </select>
-        </label>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={{ ...FM, fontSize: 10.5, color: C.sub, letterSpacing: 0.4 }}>MARKET</span>
-          <select value={market} onChange={(e) => setMarket(e.target.value)} style={sel}>
-            {MARKETS.map((m) => <option key={m} value={m}>{MARKET[m].label}</option>)}
-          </select>
-        </label>
-        <span style={{ ...FM, fontSize: 11.5, color: C.sub, paddingBottom: 8 }}>
-          {total.picks} picks · {total.graded} graded
-          {total.pending > 0 && ` · ${total.pending} awaiting Grade`}
-        </span>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10, marginBottom: 22 }}>
+        <Stat label="Plays taken (1u)" w={t.play_w} l={t.play_l} u={t.play_units} />
+        <Stat label="Top 3 each week" w={t.top_w} l={t.top_l} u={t.top_units} />
+        <Stat label="Leans" w={t.lean_w} l={t.lean_l} note="record only" />
+        <Stat label="Model side, all games" w={side.w} l={side.l} note="breakeven is 52.4%" />
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: '12px 14px' }}>
+          <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.05em', color: C.sub }}>Closing line value</div>
+          <div style={{ ...FH, fontSize: 20, fontWeight: 700, margin: '2px 0' }}>
+            {t.clv_n ? signed(t.clv_sum / t.clv_n, 2) : '—'} <span style={{ fontSize: 13, color: C.sub }}>pts / play</span>
+          </div>
+          <div style={{ ...FM, fontSize: 12, color: C.sub }}>
+            {t.clv_n ? `beat the close ${t.clv_beat} of ${t.clv_n} (${f1((100 * t.clv_beat) / t.clv_n, 0)}%)` : 'no graded plays'}
+          </div>
+        </div>
       </div>
 
-      {loading && <div style={{ ...FM, fontSize: 12.5, color: C.sub }}>Loading…</div>}
-      {error && <div style={{ ...FM, fontSize: 12.5, color: C.warn }}>{error}</div>}
+      <h2 style={{ ...FH, fontSize: 15, margin: '0 0 8px' }}>By week</h2>
+      <div style={{ overflowX: 'auto', border: `1px solid ${C.border}`, borderRadius: 8, background: C.surface, marginBottom: 24 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>{['Week', 'Source', 'Plays', 'Units', 'Top 3', 'Leans', 'All games', 'Avg CLV'].map((h) => <th key={h} style={head}>{h}</th>)}</tr></thead>
+          <tbody>
+            {byWeek.map((r) => (
+              <tr key={`${r.s}-${r.w}`}>
+                <td style={cell}>{season === 'since2022' ? `${r.s} · ` : ''}Week {r.w}</td>
+                <td style={{ ...cell, color: C.sub }}>{r.src === 'live' ? 'Forward' : r.src === 'archive' ? 'Backfill' : 'Mixed'}</td>
+                <td style={{ ...cell, ...FM }}>{r.play_w}-{r.play_l}{r.play_p ? `-${r.play_p}` : ''}</td>
+                <td style={{ ...cell, ...FM, color: r.play_units >= 0 ? C.green : C.warn }}>{units(r.play_units)}</td>
+                <td style={{ ...cell, ...FM }}>{r.top_w}-{r.top_l}</td>
+                <td style={{ ...cell, ...FM }}>{r.lean_w}-{r.lean_l}</td>
+                <td style={{ ...cell, ...FM }}>{r.aw}-{r.al}</td>
+                <td style={{ ...cell, ...FM }}>{r.clv_n ? signed(r.clv_sum / r.clv_n) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-      {!loading && !error && total.picks === 0 && (
-        <div style={{
-          border: `1px dashed ${C.border}`, background: C.surface, borderRadius: 6,
-          padding: '12px 14px', ...FM, fontSize: 12, lineHeight: 1.7, color: C.sub,
-        }}>
-          <b style={{ color: C.text }}>No {MARKET[market].label} picks computed for {season}.</b>
-          {market === 'total'
-            ? ' No totals predictions have been ingested yet, so the engine has nothing to grade.'
-            : ' Run Recalibrate then Compute on the Ingest page first.'}
-        </div>
-      )}
-
-      {!loading && !error && total.picks > 0 && !anyGraded && (
-        <div style={{
-          border: `1px dashed ${C.gold}`, background: `${C.gold}14`, borderRadius: 6,
-          padding: '12px 14px', margin: '0 0 16px', ...FM, fontSize: 12, lineHeight: 1.7, color: C.text,
-        }}>
-          <b style={{ color: C.gold }}>Nothing graded yet.</b> {total.picks} picks exist for {season}
-          {total.pending > 0 && `, ${total.pending} of them on games that are already final`}, but
-          nfl_grade has not been run for this market. Run <b>Grade</b> for each completed week on the
-          Ingest page and this page fills in.
-        </div>
-      )}
-
-      {!loading && !error && total.backfill > 0 && (
-        <div style={{
-          border: '1px dashed #facc15', background: '#facc1514', borderRadius: 6,
-          padding: '12px 14px', margin: '0 0 16px', ...FM, fontSize: 12, lineHeight: 1.7, color: C.text,
-        }}>
-          <b style={{ color: '#facc15' }}>
-            {total.backfill === total.picks
-              ? `All ${total.picks} picks are backfill.`
-              : `${total.backfill} of ${total.picks} picks are backfill.`}
-          </b>{' '}
-          Backfill rows were computed after kickoff, so the result was already knowable when the
-          number was written, and they were never pre-registered. They record what the engine would
-          have said and cannot support the formula — read the W-L-P and units columns on those rows
-          as a description of the model, not as a result. The NFL forward test begins with the first
-          week computed before kickoff.
-        </div>
-      )}
-
-      {!loading && !error && total.picks > 0 && (
-        <>
-          <WeekTable weeks={weeks} total={total} openWeek={openWeek} setOpenWeek={setOpenWeek} />
-          {openWeek != null && (
-            <PickTable
-              week={openWeek} market={market}
-              picks={picks.filter((p) => p.week === openWeek)}
-              games={games} grades={grades}
-            />
-          )}
-        </>
-      )}
+      <h2 style={{ ...FH, fontSize: 15, margin: '0 0 4px' }}>Systems · {MARKETS[market].long}</h2>
+      <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>
+        {asOf ? `Weights for ${asOf.season} week ${asOf.as_of_week}, from games before it. ` : ''}
+        Score is average points of error versus the median system on the same game (negative is better), blended with last season.
+        A single system's weight is capped near 25%. Records are against the closing line.
+      </div>
+      <div style={{ overflowX: 'auto', border: `1px solid ${C.border}`, borderRadius: 8, background: C.surface }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>{['Rank', 'System', 'Games', 'Last season', market === 'total' ? 'O/U' : 'ATS', '%', 'Avg error', 'Score', 'Weight'].map((h) => <th key={h} style={head}>{h}</th>)}</tr></thead>
+          <tbody>
+            {sys.map((s) => (
+              <tr key={s.col} style={{ opacity: n(s.weight) > 0 ? 1 : 0.6 }}>
+                <td style={{ ...cell, ...FM }}>{s.rank}</td>
+                <td style={cell}>{s.name}</td>
+                <td style={{ ...cell, ...FM }}>{s.games}</td>
+                <td style={{ ...cell, ...FM, color: C.sub }}>{s.prior_games || '—'}</td>
+                <td style={{ ...cell, ...FM }}>{s.wins}-{s.losses}{s.pushes ? `-${s.pushes}` : ''}</td>
+                <td style={{ ...cell, ...FM }}>{s.ats_pct === null ? '—' : `${f1(100 * n(s.ats_pct))}%`}</td>
+                <td style={{ ...cell, ...FM }}>{s.mae === null ? '—' : f1(s.mae, 2)}</td>
+                <td style={{ ...cell, ...FM }}>{s.score === null ? '—' : signed(s.score, 2)}</td>
+                <td style={{ ...cell, ...FM }}>{n(s.weight) > 0 ? `${f1(s.share, 1)}%` : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </main>
-  );
-}
-
-const WCOLS = '62px 58px 58px 86px 62px 78px 72px 70px 86px';
-
-function WeekTable({ weeks, total, openWeek, setOpenWeek }) {
-  return (
-    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, overflow: 'hidden', marginBottom: 16 }}>
-      <div style={{ overflowX: 'auto' }}>
-        <div style={{
-          display: 'grid', gridTemplateColumns: WCOLS, gap: 9, padding: '8px 13px',
-          background: C.surface2, ...FM, fontSize: 9.5, color: C.sub, letterSpacing: 0.4, minWidth: 646,
-        }}>
-          <span>WEEK</span><span>PICKS</span><span>TIERED</span><span>W-L-P</span>
-          <span>WIN%</span><span>UNITS</span><span>AVG CLV</span><span>BEAT CLOSE</span><span>COHORT</span>
-        </div>
-
-        {weeks.map((r) => {
-          const on = openWeek === r.week;
-          return (
-            <button
-              key={r.week}
-              onClick={() => setOpenWeek(on ? null : r.week)}
-              aria-expanded={on}
-              style={{
-                display: 'grid', gridTemplateColumns: WCOLS, gap: 9, alignItems: 'center',
-                width: '100%', textAlign: 'left', padding: '8px 13px', minWidth: 646,
-                borderTop: `1px solid ${C.border}`, border: 'none',
-                borderLeft: `3px solid ${on ? C.blue : 'transparent'}`,
-                background: on ? C.surface2 : 'transparent', color: C.text,
-                ...FM, fontSize: 12, cursor: 'pointer',
-              }}
-            >
-              <span style={{ fontWeight: 700 }}>{r.week >= 19 ? `${r.week} post` : r.week}</span>
-              <span style={{ color: C.sub }}>{r.picks}</span>
-              <span style={{ color: C.sub }}>{r.tiered}</span>
-              <span>{r.graded ? `${r.w}-${r.l}-${r.p}` : <span style={{ color: C.sub }}>pending</span>}</span>
-              <span>{r.graded ? pct(r.w, r.l) : '—'}</span>
-              <span style={{ color: unitColor(r.units), fontWeight: 700 }}>
-                {r.graded ? signed(r.units) : '—'}
-              </span>
-              <span style={{ color: C.sub }}>{r.clvN ? signed(r.clvSum / r.clvN) : '—'}</span>
-              <span style={{ color: C.sub }}>{r.graded ? `${r.beatClose}/${r.graded}` : '—'}</span>
-              <span style={{ color: r.backfill === r.picks ? '#facc15' : r.backfill ? C.gold : C.green }}>
-                {r.backfill === 0 ? 'forward'
-                  : r.backfill === r.picks ? 'backfill'
-                  : `${r.backfill}/${r.picks} backfill`}
-              </span>
-            </button>
-          );
-        })}
-
-        <div style={{
-          display: 'grid', gridTemplateColumns: WCOLS, gap: 9, alignItems: 'center',
-          padding: '9px 13px', borderTop: `2px solid ${C.border}`, background: C.surface2,
-          ...FM, fontSize: 12, fontWeight: 700, minWidth: 646,
-        }}>
-          <span>TOTAL</span>
-          <span style={{ color: C.sub }}>{total.picks}</span>
-          <span style={{ color: C.sub }}>{total.tiered}</span>
-          <span>{total.graded ? `${total.w}-${total.l}-${total.p}` : '—'}</span>
-          <span>{total.graded ? pct(total.w, total.l) : '—'}</span>
-          <span style={{ color: unitColor(total.units) }}>{total.graded ? signed(total.units) : '—'}</span>
-          <span style={{ color: C.sub }}>{total.clvN ? signed(total.clvSum / total.clvN) : '—'}</span>
-          <span style={{ color: C.sub }}>{total.graded ? `${total.beatClose}/${total.graded}` : '—'}</span>
-          <span style={{ color: total.backfill === total.picks ? '#facc15' : total.backfill ? C.gold : C.green }}>
-            {total.backfill === 0 ? 'forward'
-              : total.backfill === total.picks ? 'all backfill'
-              : `${total.backfill}/${total.picks} backfill`}
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-const RESULT_COLOR = { W: C.green, L: C.warn, P: C.sub, null: C.sub };
-const PCOLS = 'minmax(0,1fr) 150px 54px 62px 64px 66px';
-
-function PickTable({ week, market, picks, games, grades }) {
-  const M = MARKET[market];
-  return (
-    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, overflow: 'hidden' }}>
-      <div style={{ padding: '10px 13px', ...FM, fontSize: 10.5, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>
-        WEEK {week} · {picks.length} PICKS
-      </div>
-      <div style={{ overflowX: 'auto' }}>
-        <div style={{
-          display: 'grid', gridTemplateColumns: PCOLS, gap: 9, padding: '6px 13px',
-          background: C.surface2, ...FM, fontSize: 9.5, color: C.sub, letterSpacing: 0.4, minWidth: 620,
-        }}>
-          <span>GAME</span><span>PICK</span><span>TIER</span><span>RESULT</span><span>UNITS</span><span>CLV</span>
-        </div>
-
-        {picks.map((pick) => {
-          const game = games[pick.game_id];
-          const g = grades[pick.id];
-          const tierColor = TIER_COLOR[pick.tier] || C.sub;
-          const sideName = M.sideLabel(pick, game || {});
-          return (
-            <div key={pick.id} style={{
-              display: 'grid', gridTemplateColumns: PCOLS, gap: 9, alignItems: 'center',
-              padding: '7px 13px', borderTop: `1px solid ${C.border}`, ...FM, fontSize: 11.5, minWidth: 620,
-            }}>
-              <span style={{ ...FH, fontSize: 12.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {game ? `${game.away_team} @ ${game.home_team}` : `game ${pick.game_id}`}
-                {game?.completed && (
-                  <span style={{ ...FM, fontSize: 10.5, color: C.sub }}>
-                    {' '}{game.away_score}–{game.home_score}
-                  </span>
-                )}
-              </span>
-              <span>
-                {sideName ? `${sideName} ${M.atLine(pick.line_used, pick)}` : '—'}
-              </span>
-              <span style={{ color: tierColor, fontWeight: 700 }}>
-                {pick.tier === 'No tier' ? '—' : pick.tier}
-                {isPreRegistered(pick, game) === false && (
-                  <span title="Computed after kickoff — not pre-registered"
-                        style={{ color: '#facc15', fontWeight: 400 }}> ·bf</span>
-                )}
-              </span>
-              <span style={{ color: g ? RESULT_COLOR[norm(g.result)] || C.sub : C.sub, fontWeight: 700 }}>
-                {g ? (norm(g.result) || g.result || '?') : game?.completed ? 'ungraded' : 'pending'}
-              </span>
-              <span style={{ color: g && g.units_pl != null ? unitColor(parseFloat(g.units_pl)) : C.sub }}>
-                {g && g.units_pl != null ? signed(g.units_pl) : '—'}
-              </span>
-              <span style={{ color: C.sub }}>
-                {g && g.clv != null ? signed(g.clv) : '—'}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    </div>
   );
 }

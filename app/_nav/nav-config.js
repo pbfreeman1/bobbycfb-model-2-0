@@ -52,9 +52,7 @@ export const NAV_BY_SPORT = {
   nfl: {
     tabs: [
       { key: 'board', label: 'Board', icon: 'board', pages: [
-        { href: '/nfl/dashboard', label: 'Dashboard' },
-        { href: '/nfl/ats', label: 'ATS' },
-        { href: '/nfl/totals', label: 'O/U' },
+        { href: '/nfl/dashboard', label: 'Weekly Board' },
       ] },
       { key: 'results', label: 'Results', icon: 'results', pages: [
         { href: '/nfl/results', label: 'Results' },
@@ -62,7 +60,14 @@ export const NAV_BY_SPORT = {
     ],
     more: [
       { group: 'Admin', items: [
-        { href: '/nfl/ingest', label: 'Ingest' },
+        { href: '/nfl/log', label: 'Pull Log' },
+      ] },
+      { group: 'Archive', items: [
+        { href: '/nfl/legacy/dashboard', label: 'Old Dashboard' },
+        { href: '/nfl/legacy/ats', label: 'Old ATS' },
+        { href: '/nfl/legacy/totals', label: 'Old O/U' },
+        { href: '/nfl/legacy/results', label: 'Old Results' },
+        { href: '/nfl/ingest', label: 'Manual CSV Ingest' },
       ] },
     ],
   },
