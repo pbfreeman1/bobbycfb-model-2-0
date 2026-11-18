@@ -6,8 +6,9 @@
 // recomputes on a schedule, so there is nothing to upload or run here.
 // This is a tracking and research surface with paper units.
 
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import RefreshButton from '../_ui/RefreshButton';
+import GameDetail from '../_ui/GameDetail';
 import {
   C, FH, FM, TIER_COLOR, f1, fmtDay, fmtET, lastRun, latestBoardDate, loadBoard, shiftDate, spreadFor, todayET, units,
 } from '../../../lib/cbb';
@@ -48,9 +49,9 @@ function Flags({ flags }) {
   );
 }
 
-function TopSpot({ row, n }) {
+function TopSpot({ row, n, onOpen }) {
   return (
-    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.green}`, borderRadius: 8, padding: '12px 14px' }}>
+    <button onClick={onOpen} title="Open the full breakdown" style={{ textAlign: 'left', color: C.text, cursor: 'pointer', background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.green}`, borderRadius: 8, padding: '12px 14px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
         <span style={{ ...FM, fontSize: 11, color: C.sub }}>#{n}</span>
         <ResultTag row={row} />
@@ -66,30 +67,7 @@ function TopSpot({ row, n }) {
         <span>Spread of models {f1(row.std_dev)}</span>
       </div>
       <div style={{ marginTop: 8 }}><Flags flags={row.flags} /></div>
-    </div>
-  );
-}
-
-function Systems({ row }) {
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '4px 0 6px' }}>
-      {row.systems.map((s) => {
-        const d = Number(s.margin) - row.line;
-        const withPick = row.edge && Math.sign(d) === Math.sign(row.edge);
-        const weighted = Number(s.weight) > 0;
-        return (
-          <div key={s.system} style={{
-            ...FM, fontSize: 11.5, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6,
-            padding: '5px 8px', opacity: weighted ? 1 : 0.55,
-          }}>
-            <div style={{ color: C.sub }}>{s.system}{weighted ? '' : ' (no weight)'}</div>
-            <div style={{ color: withPick ? C.green : C.warn }}>
-              {row.home} {spreadFor('home', s.margin)} · {d >= 0 ? '+' : ''}{d.toFixed(1)} vs line
-            </div>
-          </div>
-        );
-      })}
-    </div>
+    </button>
   );
 }
 
@@ -124,6 +102,8 @@ export default function CbbDashboard() {
   }, [date, tick]);
 
   const plays = useMemo(() => rows.filter((r) => r.tier === 'Play'), [rows]);
+  const openRow = open ? rows.find((r) => r.game_id === open) || null : null;
+  const closeDetail = useCallback(() => setOpen(null), []);
   const top = useMemo(() => [...plays].sort(SORTS.rank.fn).slice(0, 5), [plays]);
   const shown = useMemo(() => {
     const base = tierFilter === 'all' ? rows : rows.filter((r) => r.tier === tierFilter);
@@ -177,7 +157,7 @@ export default function CbbDashboard() {
         <>
           <h2 style={{ ...FH, fontSize: 15, margin: '0 0 10px' }}>Top spots</h2>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(215px, 1fr))', gap: 10, marginBottom: 22 }}>
-            {top.map((r, i) => <TopSpot key={r.game_id} row={r} n={i + 1} />)}
+            {top.map((r, i) => <TopSpot key={r.game_id} row={r} n={i + 1} onOpen={() => setOpen(r.game_id)} />)}
           </div>
         </>
       )}
@@ -210,8 +190,7 @@ export default function CbbDashboard() {
               </thead>
               <tbody>
                 {shown.map((r) => (
-                  <Fragment key={r.game_id}>
-                    <tr onClick={() => setOpen(open === r.game_id ? null : r.game_id)} style={{ cursor: 'pointer' }}>
+                    <tr key={r.game_id} onClick={() => setOpen(r.game_id)} style={{ cursor: 'pointer' }} title="Open the full breakdown">
                       <td style={{ ...cell, ...FM, color: C.sub }}>{r.rank_in_day ?? '—'}</td>
                       <td style={cell}>{r.road} @ {r.home}{r.neutral ? ' (N)' : ''}</td>
                       <td style={{ ...cell, fontWeight: 700, color: TIER_COLOR[r.tier] || C.sub }}>{r.tier || '—'}</td>
@@ -227,10 +206,7 @@ export default function CbbDashboard() {
                         {r.home_score === null ? '' : `${r.road_score}-${r.home_score} `}<ResultTag row={r} />
                       </td>
                     </tr>
-                    {open === r.game_id && (
-                      <tr><td colSpan={12} style={{ ...cell, whiteSpace: 'normal', background: C.surface2 }}><Systems row={r} /></td></tr>
-                    )}
-                  </Fragment>
+
                 ))}
               </tbody>
             </table>
@@ -242,8 +218,10 @@ export default function CbbDashboard() {
         <summary style={{ cursor: 'pointer', color: C.text }}>How to read this board</summary>
         <p><b style={{ color: C.text }}>Model</b> is the weighted average of the PredictionTracker systems that have beaten the median system on error this season. <b style={{ color: C.text }}>Edge</b> is the gap between that number and the line. <b style={{ color: C.text }}>Agree</b> is the share of system weight on the pick side. <b style={{ color: C.text }}>SD</b> is how spread out the systems are.</p>
         <p><b style={{ color: C.green }}>Play</b>: edge of 1.5+ with 70%+ agreement, tracked at a flat 1 unit (win +1.0, lose -1.1). <b style={{ color: C.gold }}>Lean</b>: edge of 1.0+ with 60%+ agreement, record only. Top spots are the five highest-ranked plays; rank favors agreement and tight systems and caps edge at 4 points.</p>
-        <p>Lines and predictions freeze at noon ET on game day. Results are graded the next morning against the frozen line. Tap any row for the per-system breakdown.</p>
+        <p>Lines and predictions freeze at noon ET on game day. Results are graded the next morning against the frozen line. Tap any game for the full breakdown: the read, the opening-line gap, every system with its season accuracy, both teams&rsquo; form and rest, and how similar spots have done.</p>
       </details>
+
+      {openRow && <GameDetail row={openRow} onClose={closeDetail} />}
     </main>
   );
 }

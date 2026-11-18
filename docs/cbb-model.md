@@ -69,3 +69,14 @@ update cbb_systems set status = 'include' where col = 'linenew';                
 - Postponed games never get a score and stay ungraded.
 - The backfilled record uses PT's final line; the forward record uses the line frozen at noon ET.
 - App pages: `/cbb/dashboard`, `/cbb/results`, `/cbb/log`.
+
+## Game detail panel (added Nov 18, 2026)
+Tapping a game or a top spot on `/cbb/dashboard` opens a side panel (`app/cbb/_ui/GameDetail.js`):
+the pick and result, a stat grid (edge, agreement, top-5 systems, system spread, coverage, rank score,
+gap to the opener, line move), the read (reasons for and against), a number line of the opener, line,
+model and every system, line and prediction movement, every system with its season ATS %, average
+error and bias (`cbb_system_board`), both teams' record, ATS, scoring, rest and last five, and how
+similar spots have done this season.
+Similar spots come from the view `cbb_spot_stats` (migration `cbb_spot_stats`): graded games bucketed
+by edge × agreement, and by the consensus's gap to the opening line with how often the line then moved
+toward it. It covers games with a stored signal (2026-27 so far; 2025-26 has scores but no stored signals).
