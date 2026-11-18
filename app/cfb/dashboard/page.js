@@ -1,14 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { sbFetch, sbRpc, fmtKickoff } from '../../../lib/supabase';
+import { sbFetch, fmtKickoff } from '../../../lib/supabase';
 import {
-  TIER_COLOR, TIER_UNITS, fmtSpread, teamLine, nearMiss, tierChecklist,
+  TIER_COLOR, TIER_UNITS, fmtSpread, teamLine, nearMiss,
   DEFINITIONS, TIER_THRESHOLDS_DISPLAY, defFor,
 } from '../../../lib/bobby-model';
 import { attachBobbyRank } from '../../../lib/bobby-rank';
 import { buildTagPayload, resolveRankInput } from '../../../lib/research-sources';
 import SourcePicker, { useResearchSources } from '../_research/SourcePicker';
+import GameDetail from '../_ui/GameDetail';
 import { shortTeam, teamSearchText } from '../../../lib/team-short';
 import {
   BET_TYPES, validatePick, unitsPL, aggregate, pickDescription, researchDescription, fmtOdds,
@@ -23,16 +24,6 @@ const C = {
 };
 
 const TIER_ORDER = ['3U', '2U', '1U', 'Lean', 'No tier'];
-
-// Several listed systems are variants of one underlying rating, so a hit count
-// can look like broad agreement while really being one method counted four
-// times. Grouping them makes that visible.
-const SYSTEM_FAMILIES = [
-  { name: 'Sagarin', cols: ['linesagpred', 'linesaggm', 'linesag', 'linesagr'] },
-  { name: 'Pi-Rate', cols: ['linepimean', 'linepiratings', 'linepibias'] },
-];
-const FAMILY_OF = {};
-for (const f of SYSTEM_FAMILIES) for (const c of f.cols) FAMILY_OF[c] = f.name;
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -299,25 +290,6 @@ function BottomSheet({ title, onClose, children, footer }) {
 // ---------------------------------------------------------------------------
 // Accordion section: on desktop a plain passthrough; on phones a tappable header
 // with a one-line summary, body kept mounted (hidden) so typed notes persist.
-function Acc({ mobile, title, summary, info, open, onToggle, children }) {
-  if (!mobile) return children;
-  return (
-    <div className="bm-acc" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', minHeight: 48 }}>
-        <button type="button" onClick={onToggle} aria-expanded={open} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '0 6px 0 14px', minHeight: 48, background: 'transparent', border: 'none', color: C.text, cursor: 'pointer', textAlign: 'left' }}>
-          <span style={{ ...FM, fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{title}</span>
-          {summary && <span style={{ ...FM, fontSize: 11, color: C.sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>{summary}</span>}
-        </button>
-        {info}
-        <button type="button" onClick={onToggle} aria-label={open ? 'Collapse' : 'Expand'} tabIndex={-1} style={{ width: 44, minHeight: 48, background: 'transparent', border: 'none', color: C.sub, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transform: open ? 'rotate(180deg)' : 'none' }}><polyline points="6 9 12 15 18 9"></polyline></svg>
-        </button>
-      </div>
-      <div className="bm-acc-body" style={{ display: open ? 'block' : 'none', borderTop: `1px solid ${C.border}` }}>{children}</div>
-    </div>
-  );
-}
-
 function LegendModal({ onClose, config }) {
   const c = config || {};
   const num = (k, d) => (Number.isFinite(c[k]) ? c[k] : d);
@@ -329,7 +301,7 @@ function LegendModal({ onClose, config }) {
         <li>Each game shows the <b style={{ color: C.text }}>Bobby Model pick</b>: the side where the best-performing 2026 systems agree against the Vegas line, with the model's own line and the edge.</li>
         <li>Games are binned <b style={{ color: C.text }}>3U, 2U, 1U or Lean</b>. Tap the unit cards at the top to filter the board to those tiers — tap again to turn one off.</li>
         <li><b style={{ color: C.text }}>Bobby Rank (#N)</b> orders the whole week best play to worst: unit tier first, then a strength score from weighted vote share, edge and tightness, with edge tapered past 3 points and ignored past 5 (bigger edges have not held up ATS). It is fixed per game — searching, filtering or re-sorting never changes a game's number.</li>
-        <li>Open a card with the arrow for the full breakdown: stats, tier checklist, how the vote splits, every system's prediction and weight, and your notes.</li>
+        <li>Tap a matchup or the arrow for the full breakdown panel: the read (reasons for and against), research tags with each source's season record, where every system sits against the line, tier checklist, vote split, every system's prediction and weight, top-k hits, both teams' form, and your notes.</li>
         <li>Log your own play with <b style={{ color: C.blue }}>+ Bobby Pick</b> and tag outside opinions with <b style={{ color: C.text }}>+ Research</b>. Your picks roll into My card.</li>
         <li>Tap any <span style={{ display: 'inline-block', width: 13, height: 13, borderRadius: '50%', border: `1px solid ${C.sub}`, color: C.sub, ...FM, fontSize: 9, lineHeight: '11px', textAlign: 'center' }}>i</span> for a definition.</li>
       </ol>
@@ -725,8 +697,8 @@ function ResearchPickModal({ game, onClose, onSaved }) {
 // Game card
 // ---------------------------------------------------------------------------
 function GameCard({
-  g, rank, config, logos, preds, weightsByModel, picks, research, expanded, onToggle,
-  onOpenPick, onOpenResearch, onRemoveResearch, onSaveNote,
+  g, rank, config, logos, picks, research, expanded, onToggle,
+  onOpenPick, onOpenResearch, onRemoveResearch,
 }) {
   const { game, signal } = g;
   const home = game.home_team, away = game.away_team;
@@ -734,14 +706,10 @@ function GameCard({
   const tierColor = TIER_COLOR[tier];
   const homeAbbr = abbrFor(home), awayAbbr = abbrFor(away);
   const [defKey, setDefKey] = useState(null);
-  const [note, setNote] = useState('');
-  const [savingNote, setSavingNote] = useState(false);
   const toggleDef = (k) => setDefKey((prev) => (prev === k ? null : k));
   // Phone layout: a compact card (matchup, pick, three stats). Everything else
   // sits one tap deeper, in the expanded view or the add sheet.
   const isMobile = useIsMobile();
-  const [accOpen, setAccOpen] = useState({ checks: true, vote: true });
-  const toggleAcc = (k) => setAccOpen((o) => ({ ...o, [k]: !o[k] }));
   const [addOpen, setAddOpen] = useState(false);
   const [showResearch, setShowResearch] = useState(false);
 
@@ -799,102 +767,6 @@ function GameCard({
   const pickTeamDisp = pickTeam && useShort ? shortTeam(pickTeam) : pickTeam;
   const pickAbbr = signal?.pick_side === 'home' ? homeAbbr : awayAbbr;
 
-  // Individual system breakdown for this game, sorted by weight desc.
-  const systemRows = useMemo(() => {
-    if (!signal) return [];
-    const rows = (preds || [])
-      .map((p) => ({ ...p, w: weightsByModel[p.model_id] }))
-      .filter((p) => p.w && p.w.weight > 0);
-    rows.sort((a, b) => b.w.weight - a.w.weight);
-    const sw = rows.reduce((a, r) => a + r.w.weight, 0) || 1;
-    return rows.map((r) => {
-      const pm = parseFloat(r.predicted_margin);
-      const on = Math.sign(pm - signal.vegas_line) === Math.sign(signal.edge);
-      const side = on ? pickAbbr : (signal.pick_side === 'home' ? awayAbbr : homeAbbr);
-      return {
-        name: r.w.system_name,
-        pred: `${teamLine(pm, signal.pick_side)} ${pickAbbr}`,
-        on, side,
-        share: (r.w.weight / sw) * 100,
-        rec: `${r.w.wins}-${r.w.losses}${r.w.pushes ? `-${r.w.pushes}` : ''}`,
-      };
-    });
-  }, [signal, preds, weightsByModel, pickAbbr, awayAbbr, homeAbbr]);
-
-  const onCount = systemRows.filter((s) => s.on).length;
-  const checklist = signal ? tierChecklist({ ...signal, tier }, config) : null;
-
-  const stats = signal ? [
-    { k: 'pick', label: 'Bobby Model pick', val: `${pickTeam} ${teamLine(signal.vegas_line, signal.pick_side)}` },
-    { k: 'modelLine', label: 'Model line', val: `${pickAbbr} ${teamLine(signal.consensus, signal.pick_side)}` },
-    { k: 'vegas', label: 'Vegas line', val: favSide ? `${favSide === 'home' ? homeAbbr : awayAbbr} ${fmtSpread(-Math.abs(vegasLine))}` : 'PK' },
-    { k: 'edge', label: 'Edge', val: `+${Math.abs(signal.edge).toFixed(1)} pts` },
-    { k: 'vs', label: 'Vote share', val: `${Math.round(signal.vote_share * 100)}% (${onCount} of ${signal.voters})` },
-    { k: 'sd', label: 'Std dev', val: `${signal.std_dev.toFixed(1)} pts` },
-    { k: 'conv', label: 'Conviction', val: signal.conviction.toFixed(2) },
-    { k: 'move', label: 'Line move', val: `${signal.opening_line != null ? fmtSpread(signal.opening_line) : '—'} → ${fmtSpread(signal.vegas_line)}` },
-    { k: 'ou', label: 'Total (O/U)', val: game.over_under != null ? String(game.over_under) : '—' },
-    {
-      k: 'hits',
-      label: `Top-${topkPct}% hits`,
-      val: hitCount == null ? '—' : `${hitCount}/${modelsN ?? '—'}${hitSideAbbr ? ` ${hitSideAbbr}` : ''}`,
-    },
-  ] : [];
-
-  // Per-system top-k detail, fetched once on first expand. It stays out of the
-  // week-level load: one game's worth of rows, on demand.
-  const [topk, setTopk] = useState(null);
-  const [topkErr, setTopkErr] = useState(null);
-  const topkAsked = useRef(false);
-  useEffect(() => {
-    if (!expanded || !signal || topkAsked.current) return;
-    topkAsked.current = true;
-    sbRpc('cfb_topk_detail', { p_game_id: game.id })
-      .then((rows) => setTopk(rows.map((r) => ({
-        ...r,
-        predicted_margin: parseFloat(r.predicted_margin),
-        model_edge: parseFloat(r.model_edge),
-        weight: r.weight != null ? parseFloat(r.weight) : null,
-      }))))
-      .catch((e) => setTopkErr(e.message));
-  }, [expanded, signal, game.id]);
-
-  // Flagged first, then by rank; grouped into families so repeated variants of
-  // one rating cannot pass for independent agreement.
-  const topkGroups = useMemo(() => {
-    if (!topk) return [];
-    const order = [...SYSTEM_FAMILIES.map((f) => f.name), 'Other'];
-    const by = {};
-    for (const r of topk) {
-      const fam = FAMILY_OF[r.colname] || 'Other';
-      (by[fam] = by[fam] || []).push(r);
-    }
-    for (const k of Object.keys(by)) {
-      by[k].sort((a, b) => (b.flagged === a.flagged ? a.rn - b.rn : b.flagged - a.flagged));
-    }
-    return order.filter((k) => by[k]?.length).map((k) => ({ family: k, rows: by[k] }));
-  }, [topk]);
-
-  const flaggedRows = (topk || []).filter((r) => r.flagged);
-  const famNote = useMemo(() => {
-    if (!flaggedRows.length) return null;
-    const counts = {};
-    for (const r of flaggedRows) {
-      const fam = FAMILY_OF[r.colname];
-      if (fam) counts[fam] = (counts[fam] || 0) + 1;
-    }
-    const parts = Object.entries(counts)
-      .sort((a, b) => b[1] - a[1])
-      .map(([fam, n]) => `${n} of ${flaggedRows.length} flags are ${fam} variants`);
-    return parts.length ? parts.join(' · ') : null;
-  }, [topk]);
-
-  async function handleSaveNote() {
-    if (!note.trim()) return;
-    setSavingNote(true);
-    try { await onSaveNote(note.trim()); setNote(''); } finally { setSavingNote(false); }
-  }
-
   return (
     <div style={{ display: 'flex', alignItems: 'stretch', gap: 8, marginBottom: 12 }} className="bm-card-row">
       <div className="bm-rank" style={{ ...FM, fontSize: 12, color: C.sub, flexShrink: 0, textAlign: 'right', paddingTop: 16 }} title="Bobby Rank">{rank ? `#${rank}` : '—'}</div>
@@ -908,7 +780,7 @@ function GameCard({
             {!isMobile ? (<>
             {/* Row 1 — matchup. Full names by default; the card falls back to
                 short names only when the full pair cannot fit. */}
-            <div className="bm-match-row" style={{ padding: '14px 16px 10px' }}>
+            <div className="bm-match-row" onClick={onToggle} title="Open full breakdown" style={{ padding: '14px 16px 10px', cursor: 'pointer' }}>
               <div ref={boxRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: '1 1 auto' }}>
                 {teamPair(useShort)}
                 {/* Hidden, never-wrapped copy of the full names — the yardstick. */}
@@ -1008,7 +880,7 @@ function GameCard({
             </>) : (
             <div style={{ padding: '12px 10px 12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
               {/* Matchup + tier */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <div onClick={onToggle} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, cursor: 'pointer' }}>
                 <div ref={boxRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: '1 1 auto' }}>
                   {teamPair(useShort)}
                   <div
@@ -1095,8 +967,8 @@ function GameCard({
             </div>
             )}
           </div>
-          <button onClick={onToggle} aria-expanded={expanded} aria-label="Toggle full breakdown" style={{ width: 44, flexShrink: 0, border: 'none', borderLeft: `1px solid ${C.border}`, background: 'transparent', color: C.sub, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transform: expanded ? 'rotate(180deg)' : 'none' }}><polyline points="6 9 12 15 18 9"></polyline></svg>
+          <button onClick={onToggle} aria-expanded={expanded} aria-label="Open full breakdown" title="Full breakdown" style={{ width: 44, flexShrink: 0, border: 'none', borderLeft: `1px solid ${C.border}`, background: expanded ? C.surface2 : 'transparent', color: expanded ? C.text : C.sub, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
           </button>
         </div>
 
@@ -1119,164 +991,6 @@ function GameCard({
           </BottomSheet>
         )}
 
-        {expanded && signal && (
-          <div style={{ borderTop: `1px solid ${C.border}`, background: C.surface2, padding: 18, display: 'flex', flexDirection: 'column', gap: 18 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px 18px' }} className="bm-stat-grid">
-              {stats.map((s) => (
-                <div key={s.k} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <span style={{ ...FM, fontSize: 10, color: C.sub, letterSpacing: 0.4, textTransform: 'uppercase' }}>{s.label}</span>
-                    <InfoIcon defKey={s.k} active={defKey === s.k} onToggle={toggleDef} />
-                  </div>
-                  <span style={{ ...FM, fontSize: 14, color: C.text }}>{s.val}</span>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.4fr)', gap: 18 }} className="bm-detail-grid">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <Acc mobile={isMobile} title="Tier checklist" summary={checklist.rows.every((r) => r.pass) ? 'All pass' : `${checklist.rows.filter((r) => r.pass).length}/${checklist.rows.length} pass`} info={<InfoIcon defKey="checks" active={defKey === 'checks'} onToggle={toggleDef} />} open={!!accOpen.checks} onToggle={() => toggleAcc('checks')}>
-                <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: 14 }}>
-                  <div className="bm-sec-title" style={{ display: 'flex', alignItems: 'center', gap: 2, marginBottom: 8 }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>TIER CHECKLIST · {checklist.title}</span>
-                    <InfoIcon defKey="checks" active={defKey === 'checks'} onToggle={toggleDef} />
-                  </div>
-                  {checklist.rows.map((r, i) => (
-                    <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 70px 44px', gap: 8, padding: '6px 0', borderTop: `1px solid ${C.border}`, ...FM, fontSize: 12 }}>
-                      <span style={{ color: '#C9CFC8' }}>{r.label}</span>
-                      <span style={{ textAlign: 'right' }}>{r.value}</span>
-                      <span style={{ fontWeight: 700, color: r.pass ? C.green : C.warn }}>{r.pass ? 'Pass' : 'Miss'}</span>
-                    </div>
-                  ))}
-                </div>
-                </Acc>
-
-                <Acc mobile={isMobile} title="Vote split" summary={`${(signal.vote_share * 100).toFixed(0)}% ${pickAbbr} · ${onCount}/${signal.voters}`} info={<InfoIcon defKey="vs" active={defKey === 'vs'} onToggle={toggleDef} />} open={!!accOpen.vote} onToggle={() => toggleAcc('vote')}>
-                <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div className="bm-sec-title" style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>HOW THE VOTE BREAKS</span>
-                    <InfoIcon defKey="vs" active={defKey === 'vs'} onToggle={toggleDef} />
-                  </div>
-                  <div style={{ display: 'flex', height: 12, borderRadius: 6, overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${(signal.vote_share * 100).toFixed(1)}%`, background: C.green }} />
-                    <div style={{ height: '100%', width: `${((1 - signal.vote_share) * 100).toFixed(1)}%`, background: C.warn }} />
-                  </div>
-                  <div style={{ ...FM, fontSize: 11, color: C.green }}>{pickAbbr} {teamLine(signal.vegas_line, signal.pick_side)} · {(signal.vote_share * 100).toFixed(1)}% of weight · {onCount} systems</div>
-                  <div style={{ ...FM, fontSize: 11, color: C.warn }}>{signal.pick_side === 'home' ? awayAbbr : homeAbbr} · {((1 - signal.vote_share) * 100).toFixed(1)}% · {signal.voters - onCount} systems</div>
-                </div>
-                </Acc>
-
-                <Acc mobile={isMobile} title="Notes" summary={note.trim() ? note.trim().slice(0, 40) : 'Add a note'} open={!!accOpen.notes} onToggle={() => toggleAcc('notes')}>
-                <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <label className="bm-sec-title" style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>NOTES</label>
-                  <textarea rows={4} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Injuries, weather, line shopping, why you played it or passed…" style={{ ...FM, fontSize: 12, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 4, color: C.text, padding: 10, resize: 'vertical' }} />
-                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                    <button onClick={handleSaveNote} disabled={savingNote || !note.trim()} style={{ ...FM, fontSize: 12, minHeight: 36, padding: '0 14px', borderRadius: 4, border: `1px solid ${C.gold}`, background: `${C.gold}1A`, color: C.gold, cursor: 'pointer' }}>
-                      {savingNote ? 'Saving…' : 'Save note'}
-                    </button>
-                  </div>
-                </div>
-                </Acc>
-              </div>
-
-              <Acc mobile={isMobile} title="Systems" summary={`${signal.voters} voting`} info={<InfoIcon defKey="weight" active={defKey === 'weight'} onToggle={toggleDef} />} open={!!accOpen.systems} onToggle={() => toggleAcc('systems')}>
-              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, overflow: 'hidden' }}>
-                <div className="bm-sec-title" style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>INDIVIDUAL BREAKDOWN · {signal.voters} VOTING SYSTEMS</span>
-                  <InfoIcon defKey="weight" active={defKey === 'weight'} onToggle={toggleDef} />
-                </div>
-                <div style={{ overflowX: 'auto' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'minmax(0,1fr) 62px 34px 46px' : 'minmax(0,1fr) 96px 54px 130px 60px', gap: isMobile ? 8 : 10, padding: '7px 14px', background: C.surface2, ...FM, fontSize: 10, color: C.sub, letterSpacing: 0.4, minWidth: isMobile ? 0 : 480 }}>
-                    <span>SYSTEM</span><span>PREDICTS</span><span>SIDE</span>{isMobile ? <span style={{ textAlign: 'right' }}>WT</span> : <><span>WEIGHT</span><span>2026 ATS</span></>}
-                  </div>
-                  {systemRows.map((m, i) => (
-                    <div key={i} style={{ display: 'grid', gridTemplateColumns: isMobile ? 'minmax(0,1fr) 62px 34px 46px' : 'minmax(0,1fr) 96px 54px 130px 60px', gap: isMobile ? 8 : 10, alignItems: 'center', padding: '7px 14px', borderTop: `1px solid ${C.border}`, ...FM, fontSize: isMobile ? 11 : 12, minWidth: isMobile ? 0 : 480 }}>
-                      <span style={{ ...FH, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.name}</span>
-                      <span style={{ color: '#C9CFC8' }}>{m.pred}</span>
-                      <span style={{ fontWeight: 700, color: m.on ? C.green : C.warn }}>{m.side}</span>
-                      {isMobile ? (
-                        <span style={{ textAlign: 'right', color: '#C9CFC8' }}>{m.share.toFixed(1)}%</span>
-                      ) : (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <div style={{ flexGrow: 1, height: 6, background: C.bg, borderRadius: 3, overflow: 'hidden' }}>
-                            <div style={{ height: '100%', width: `${Math.min(100, (m.share / 16) * 100)}%`, background: m.on ? C.green : C.warn }} />
-                          </div>
-                          <span style={{ width: 44, textAlign: 'right', color: '#C9CFC8' }}>{m.share.toFixed(1)}%</span>
-                        </div>
-                      )}
-                      {!isMobile && <span style={{ color: C.sub }}>{m.rec}</span>}
-                    </div>
-                  ))}
-                </div>
-              </div>
-              </Acc>
-            </div>
-
-            {/* Top-k hit detail: which systems put this game among their own
-                biggest edges, and on which side. Loaded on expand. */}
-            <Acc mobile={isMobile} title={`Top-${topkPct}% hits`} summary={hitCount != null ? `${hitCount}/${modelsN}${bobcat ? ' · Bobcat' : ''}${split ? ' · split' : ''}` : 'Loading…'} info={<InfoIcon defKey="hits" active={defKey === 'hits'} onToggle={toggleDef} />} open={!!accOpen.hits} onToggle={() => toggleAcc('hits')}>
-            <div style={{ background: C.surface, border: `1px solid ${bobcat ? C.gold : C.border}`, borderRadius: 6, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span className="bm-sec-title" style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: 0.5 }}>TOP-{topkPct}% HITS</span>
-                <span className="bm-sec-title"><InfoIcon defKey="hits" active={defKey === 'hits'} onToggle={toggleDef} /></span>
-                {hitCount != null && (
-                  <HitsMeter count={hitCount} total={modelsN} side={hitSide} pct={topkPct} />
-                )}
-                {bobcat && (
-                  <Badge color={C.gold}>
-                    Bobcat Formula Pick
-                    <InfoIcon defKey="bobcat" active={defKey === 'bobcat'} onToggle={toggleDef} />
-                  </Badge>
-                )}
-                {split && (
-                  <Badge color={C.lav} filled>Split {hitCount} vs {hitOpp}</Badge>
-                )}
-                {signal.coverage != null && (
-                  <span style={{ ...FM, fontSize: 11, color: lowCov ? C.warn : C.sub }}>
-                    {(signal.coverage * 100).toFixed(0)}% weight coverage
-                  </span>
-                )}
-              </div>
-
-              {famNote && <span style={{ ...FM, fontSize: 11, color: C.lav }}>{famNote}</span>}
-
-              {topkErr && <span style={{ ...FM, fontSize: 11, color: C.warn }}>Could not load system detail: {topkErr}</span>}
-              {!topk && !topkErr && <span style={{ ...FM, fontSize: 11, color: C.sub }}>Loading system detail…</span>}
-
-              {topkGroups.map((grp) => (
-                <div key={grp.family} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                  <span style={{ ...FM, fontSize: 10, color: C.sub, letterSpacing: 0.4, textTransform: 'uppercase' }}>
-                    {grp.family} · {grp.rows.filter((r) => r.flagged).length} of {grp.rows.length} flagged
-                  </span>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                    {grp.rows.map((r) => (
-                      <span
-                        key={r.model_id}
-                        title={`${r.system_name} — predicts ${r.predicted_margin}, edge ${r.model_edge > 0 ? '+' : ''}${r.model_edge.toFixed(1)}, its own rank ${r.rn} of ${r.n} games${r.weight != null ? `, weight ${(r.weight * 100).toFixed(1)}%` : ', unweighted'}`}
-                        style={{
-                          ...FM, fontSize: 10.5, padding: '3px 7px', borderRadius: 4, whiteSpace: 'nowrap',
-                          display: 'inline-flex', alignItems: 'center', gap: 5,
-                          border: `1px solid ${r.flagged ? C.gold : C.border}`,
-                          background: r.flagged ? `${C.gold}1A` : 'transparent',
-                          color: r.flagged ? C.text : C.sub,
-                          opacity: r.flagged ? 1 : 0.55,
-                        }}
-                      >
-                        <span>{r.colname.replace(/^line/, '')}</span>
-                        {r.side && <span style={{ fontWeight: 700, color: r.flagged ? C.gold : C.sub }}>{r.side === 'home' ? 'H' : 'A'}</span>}
-                        <span>{r.rn} of {r.k}</span>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-            </Acc>
-          </div>
-        )}
-        {expanded && !signal && (
-          <div style={{ borderTop: `1px solid ${C.border}`, background: C.surface2, padding: 16, ...FM, fontSize: 12, color: C.sub }}>No Bobby Model data for this game yet — run Compute for this week on the Ingest page.</div>
-        )}
       </div>
     </div>
   );
@@ -1663,7 +1377,7 @@ export default function BobbyModelDashboard() {
       const [games, signals, weights, logoRows, cfgRows] = await Promise.all([
         sbFetch(`games?select=id,home_team,away_team,kickoff_at,current_line,opening_line,over_under,tv_network,status&season=eq.${season}&week=eq.${week}`),
         sbFetch(`cfb_game_signals?select=*&season=eq.${season}&week=eq.${week}`),
-        sbFetch(`cfb_system_weights?select=model_id,weight,wins,losses,pushes,source_models(system_name,colname)&season=eq.${season}&as_of_week=eq.${week}&weight=gt.0`),
+        sbFetch(`cfb_system_weights?select=model_id,weight,wins,losses,pushes,mae,rank,source_models(system_name,colname)&season=eq.${season}&as_of_week=eq.${week}&weight=gt.0`),
         sbFetch(`team_logos?select=team_name,logo_url`),
         sbFetch(`cfb_tracker_config?select=key,value`),
       ]);
@@ -1673,7 +1387,7 @@ export default function BobbyModelDashboard() {
       setConfig(cfg);
 
       const wMap = {};
-      for (const w of weights) wMap[w.model_id] = { weight: parseFloat(w.weight), wins: w.wins, losses: w.losses, pushes: w.pushes, system_name: w.source_models?.system_name || 'Unknown' };
+      for (const w of weights) wMap[w.model_id] = { weight: parseFloat(w.weight), wins: w.wins, losses: w.losses, pushes: w.pushes, mae: w.mae != null ? parseFloat(w.mae) : null, rank: w.rank, system_name: w.source_models?.system_name || 'Unknown' };
       setWeightsByModel(wMap);
 
       sbFetch(`cfb_system_weights?select=model_id&season=eq.${season}&as_of_week=eq.${week}`)
@@ -1771,6 +1485,8 @@ export default function BobbyModelDashboard() {
   // Bobby Rank is attached here — over every game on the board, before any
   // search, filter or sort. Each game carries its own rank from this point on.
   const rankedRows = useMemo(() => attachBobbyRank(rows, config), [rows, config]);
+  const detailRow = expandedId != null ? rankedRows.find((r) => r.game.id === expandedId) || null : null;
+  const closeDetail = useCallback(() => setExpandedId(null), []);
 
   // Counts are always over the full week so the unit cards never collapse to
   // zero while a filter is on.
@@ -1897,6 +1613,18 @@ export default function BobbyModelDashboard() {
       <div style={{ maxWidth: 1100, margin: '0 auto' }}>
         {showLegend && <LegendModal onClose={() => setShowLegend(false)} config={config} />}
         {showCard && <MyCardModal initialTab={cardTab} season={season} rows={rows} picksByGame={picksByGame} onClose={() => setShowCard(false)} />}
+        {detailRow && (
+          <GameDetail
+            row={detailRow} rank={detailRow.bobbyRank} config={config} logos={logos} season={season} week={week}
+            preds={predsByGame[detailRow.game.id]} weightsByModel={weightsByModel}
+            picks={picksByGame[detailRow.game.id]} research={researchByGame[detailRow.game.id]}
+            onClose={closeDetail}
+            onOpenPick={(existing) => setPickModal({ row: detailRow, existing })}
+            onOpenResearch={() => setResearchModalRow(detailRow)}
+            onRemoveResearch={(id) => removeResearchPick(detailRow.game.id, id)}
+            onSaveNote={(text) => saveNote(detailRow.game.id, text)}
+          />
+        )}
         {pickModal && (
           <PickModal
             game={pickModal.row.game} signal={pickModal.row.signal} existing={pickModal.existing}
@@ -2079,14 +1807,12 @@ export default function BobbyModelDashboard() {
               <GameCard
                 key={r.game.id}
                 g={r} rank={r.bobbyRank} config={config} logos={logos}
-                preds={predsByGame[r.game.id]} weightsByModel={weightsByModel}
                 picks={picksByGame[r.game.id]} research={researchByGame[r.game.id]}
                 expanded={expandedId === r.game.id}
-                onToggle={() => setExpandedId((prev) => prev === r.game.id ? null : r.game.id)}
+                onToggle={() => setExpandedId(r.game.id)}
                 onOpenPick={(existing) => setPickModal({ row: r, existing })}
                 onOpenResearch={() => setResearchModalRow(r)}
                 onRemoveResearch={(id) => removeResearchPick(r.game.id, id)}
-                onSaveNote={(text) => saveNote(r.game.id, text)}
               />
             ))}
             {displayed.length === 0 && <div style={{ ...FM, fontSize: 12, color: C.sub, padding: '20px 0' }}>No games match these filters.</div>}
