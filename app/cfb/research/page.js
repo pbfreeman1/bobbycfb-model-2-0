@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState, useMemo } from 'react';
-import { SUPABASE_URL, SUPABASE_ANON_KEY, sbFetch, getCurrentWeek } from '../../../lib/supabase';
+import { SUPABASE_URL, SUPABASE_ANON_KEY, sbFetch, getBoardWeek } from '../../../lib/supabase';
 import { buildTagPayload } from '../../../lib/research-sources';
 import { teamSpread, fmtSigned } from '../../../lib/research-report';
 import SourcePicker, { useResearchSources } from '../_research/SourcePicker';
@@ -48,7 +48,7 @@ export default function Research() {
 
   useEffect(() => {
     let cancelled = false;
-    getCurrentWeek(season).then((w) => { if (!cancelled) setWeek(w); });
+    getBoardWeek(season).then((w) => { if (!cancelled) setWeek(w); });
     return () => { cancelled = true; };
   }, [season]);
 

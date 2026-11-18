@@ -44,8 +44,9 @@ export const NAV_BY_SPORT = {
         { href: '/cfb/weekly-board', label: 'Weekly Board' },
       ] },
       { group: 'Admin', items: [
+        { href: '/cfb/log', label: 'Pull Log' },
         { href: '/cfb/calibration', label: 'Calibration' },
-        { href: '/cfb/ingest', label: 'Ingest' },
+        { href: '/cfb/ingest', label: 'Manual CSV Ingest' },
       ] },
     ],
   },

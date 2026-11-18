@@ -190,6 +190,13 @@ export default function Ingest() {
         <p>Pull CFBD schedule/TV/O/U data, trigger compute engines, grade completed games</p>
       </div>
 
+      <div className="card" style={{ marginBottom: 20, borderColor: '#6FBF73' }}>
+        <strong>THE Bobby Model now runs on its own.</strong>{' '}
+        PredictionTracker predictions, ESPN schedule and finals, grading, recalibration and compute run automatically several
+        times a day (see the <a href="/cfb/log">pull log</a>, which also has a Refresh now button). This page is a manual
+        fallback. The legacy MSS/PSS engines (steps for the archive pages) are still manual.
+      </div>
+
       <div className="card" style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 20, flexWrap: 'wrap' }}>
           <label style={{ fontSize: 12, color: '#8a92a3' }}>Season</label>
