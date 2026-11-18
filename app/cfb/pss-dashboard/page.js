@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { sbFetch, fmt, fmtKickoff, SUPABASE_URL, SUPABASE_ANON_KEY } from '../../../lib/supabase';
+import { sbFetch, fmt, fmtKickoff, SUPABASE_URL, SUPABASE_ANON_KEY, getBoardWeek } from '../../../lib/supabase';
 
 const SB_HEADERS = {
   apikey: SUPABASE_ANON_KEY,
@@ -922,9 +922,7 @@ export default function PssDashboard() {
 
   useEffect(() => {
     let cancelled = false;
-    sbFetch(`games?select=week&season=eq.${season}&order=week.desc&limit=1`)
-      .then((r) => { if (!cancelled) setWeek(r.length ? r[0].week : 1); })
-      .catch(() => { if (!cancelled) setWeek(1); });
+    getBoardWeek(season).then((w) => { if (!cancelled) setWeek(w); });
     return () => { cancelled = true; };
   }, [season]);
 

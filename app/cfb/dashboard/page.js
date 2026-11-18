@@ -1,7 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { sbFetch, fmtKickoff } from '../../../lib/supabase';
+import { sbFetch, fmtKickoff, getBoardWeek } from '../../../lib/supabase';
+import { fmtET, lastRun } from '../../../lib/cfb-auto';
+import RefreshButton from '../_ui/RefreshButton';
 import {
   TIER_COLOR, TIER_UNITS, fmtSpread, teamLine, nearMiss,
   DEFINITIONS, TIER_THRESHOLDS_DISPLAY, defFor,
@@ -1362,12 +1364,12 @@ export default function BobbyModelDashboard() {
   const [showCard, setShowCard] = useState(false);
   const [cardTab, setCardTab] = useState('week');
   const [headerTip, setHeaderTip] = useState(null);
+  const [run, setRun] = useState(null);
+  useEffect(() => { lastRun().then(setRun).catch(() => {}); }, []);
 
   useEffect(() => {
     let cancelled = false;
-    sbFetch(`games?select=week&season=eq.${season}&order=week.desc&limit=1`)
-      .then((r) => { if (!cancelled) setWeek(r.length ? r[0].week : 1); })
-      .catch(() => { if (!cancelled) setWeek(1); });
+    getBoardWeek(season).then((w) => { if (!cancelled) setWeek(w); });
     return () => { cancelled = true; };
   }, [season]);
 
@@ -1654,6 +1656,18 @@ export default function BobbyModelDashboard() {
                 Weights as of Week {week} · {votingCount} of {totalSystems ?? '—'} systems voting
                 <InfoIcon defKey="weight" active={headerTip === 'weight'} onToggle={(k) => setHeaderTip((p) => p === k ? null : k)} />
               </span>
+            </div>
+            <div style={{ ...FM, fontSize: 11.5, color: C.sub, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span>
+                {run ? (
+                  <>
+                    Last pull {fmtET(run.started_at)} ET ({run.trigger === 'manual' ? 'manual' : 'scheduled'})
+                    {' · '}{run.status === 'error' ? <span style={{ color: C.warn }}>error: {run.error}</span> : run.status}
+                    {' · '}<a href="/cfb/log" style={{ color: C.sub }}>pull log</a>
+                  </>
+                ) : 'Checking last pull…'}
+              </span>
+              <RefreshButton compact onDone={(r) => { setRun(r); if (week != null) loadWeek(); }} />
             </div>
           </div>
           <div className="bm-hdr-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

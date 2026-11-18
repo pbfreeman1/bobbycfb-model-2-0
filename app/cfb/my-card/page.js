@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { SUPABASE_URL, SUPABASE_ANON_KEY, sbFetch, sbHeaders, fmt, fmtLine, fmtKickoff, getCurrentWeek } from '../../../lib/supabase';
+import { SUPABASE_URL, SUPABASE_ANON_KEY, sbFetch, sbHeaders, fmt, fmtLine, fmtKickoff, getCurrentWeek, getBoardWeek } from '../../../lib/supabase';
 import { pickDescription, unitsPL, aggregate } from '../../../lib/bet-types';
 
 // One label for every bet type, shared with the Bobby dashboard.
@@ -67,10 +67,7 @@ export default function MyCard() {
   useEffect(() => {
     let cancelled = false;
     // Default to latest scheduled week (not just final) so current week shows on load
-    fetch(`${SUPABASE_URL}/rest/v1/games?select=week&season=eq.${season}&order=week.desc&limit=1`, { headers: SB_HDR })
-      .then(r => r.json())
-      .then(rows => { if (!cancelled) setWeek(rows.length ? rows[0].week : 1); })
-      .catch(() => { if (!cancelled) setWeek(1); });
+    getBoardWeek(season).then((w) => { if (!cancelled) setWeek(w); });
     return () => { cancelled = true; };
   }, [season]);
 
