@@ -10,6 +10,9 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import RefreshButton from '../_ui/RefreshButton';
 import GameDetail from '../_ui/GameDetail';
+import TagsCell from '../../_scout/TagsCell';
+import { crowdFor } from '../../../lib/scout-client';
+import { tagSummary } from '../../../lib/scout-research';
 import {
   C, FH, FM, MARKETS, TIER_COLOR, boardWeeks, defaultWeek, f1, fmtET, fmtKick, lastRun, lineLabel, loadBoard,
   modelLabel, pickLabel, units,
@@ -24,7 +27,11 @@ const SORTS = {
   agree: { label: 'Agreement', fn: (a, b) => (b.vote_share ?? 0) - (a.vote_share ?? 0) },
   kick: { label: 'Kickoff', fn: (a, b) => String(a.kickoff).localeCompare(String(b.kickoff)) },
   game: { label: 'Matchup', fn: (a, b) => a.home.localeCompare(b.home) },
+  tags: { label: 'Outside picks', fn: (a, b) => (b._tags?.total ?? 0) - (a._tags?.total ?? 0) || (b._tags?.withN ?? 0) - (a._tags?.withN ?? 0) },
 };
+
+const grpOf = (market) => (market === 'total' ? 'total' : 'side');
+const tagLabel = (r) => (s) => (s === 'over' ? 'Over' : s === 'under' ? 'Under' : s === 'home' ? r.home_abbr : r.away_abbr);
 
 // Case- and punctuation-insensitive; matches full names or abbreviations.
 const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9 ]/g, '');
@@ -63,6 +70,7 @@ function Flags({ row }) {
 
 function TopSpot({ row, n, onOpen }) {
   const lineNow = row.line_now ?? row.line;
+  const t = row._tags;
   return (
     <button onClick={onOpen} style={{
       textAlign: 'left', cursor: 'pointer', color: C.text, background: C.surface, border: `1px solid ${C.border}`,
@@ -85,6 +93,11 @@ function TopSpot({ row, n, onOpen }) {
         <span>Agree {f1(100 * row.vote_share, 0)}%</span>
         <span>Top 5 {row.top5_side_share === null ? '—' : `${Math.round(5 * row.top5_side_share)}/5`}</span>
       </div>
+      {t && t.withN !== null && (
+        <div style={{ ...FM, fontSize: 11.5, marginTop: 6, color: t.tone === 'with' ? C.green : t.tone === 'against' ? C.warn : C.gold }}>
+          Outside picks: {t.withN} with · {t.againstN} against
+        </div>
+      )}
       <div style={{ marginTop: 8 }}><Flags row={row} /></div>
     </button>
   );
@@ -104,6 +117,7 @@ function Board() {
   const [teamQuery, setTeamQuery] = useState('');
   const [open, setOpen] = useState(null);
   const [tick, setTick] = useState(0);
+  const [crowd, setCrowd] = useState(new Map());
 
   useEffect(() => {
     defaultWeek(SEASON).then(setWeek).catch(() => setWeek(1));
@@ -118,13 +132,18 @@ function Board() {
     setLoading(true);
     setError(null);
     loadBoard(SEASON, week)
-      .then((r) => { if (live) setRows(r); })
+      .then((r) => {
+        if (!live) return;
+        setRows(r);
+        crowdFor('nfl', r.map((x) => x.game_id)).then((m) => { if (live) setCrowd(m); }).catch(() => {});
+      })
       .catch((e) => { if (live) setError(e.message); })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
   }, [week, tick]);
 
-  const mRows = useMemo(() => rows.filter((r) => r.market === market), [rows, market]);
+  const mRows = useMemo(() => rows.filter((r) => r.market === market)
+    .map((r) => ({ ...r, _tags: tagSummary(crowd.get(`${r.game_id}|${grpOf(r.market)}`), r.pick_side) })), [rows, market, crowd]);
   const taken = useMemo(() => mRows.filter((r) => r.taken_side), [mRows]);
   const top = useMemo(() => [...taken].sort(SORTS.rank.fn).slice(0, TOP_N), [taken]);
   const shown = useMemo(() => {
@@ -226,7 +245,7 @@ function Board() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  {['#', 'Matchup', 'Tier', 'Pick', 'Line', 'Open', 'Model', 'Key edge', 'Agree', 'Flags', 'Final'].map((h) => (
+                  {['#', 'Matchup', 'Tier', 'Pick', 'Tags', 'Line', 'Open', 'Model', 'Key edge', 'Agree', 'Flags', 'Final'].map((h) => (
                     <th key={h} style={head}>{h}</th>
                   ))}
                 </tr>
@@ -248,6 +267,7 @@ function Board() {
                       <td style={{ ...cell, fontWeight: 600 }}>
                         {r.taken_side ? pickLabel(r, r.taken_side, r.taken_line) : pickLabel(r, r.pick_side, lineNow)}
                       </td>
+                      <td style={cell}><TagsCell summary={r._tags} labelFor={tagLabel(r)} /></td>
                       <td style={{ ...cell, ...FM }}>{lineLabel(r, lineNow)}</td>
                       <td style={{ ...cell, ...FM, color: C.sub }}>{lineLabel(r, r.open_line)}</td>
                       <td style={{ ...cell, ...FM }}>{modelLabel(r)}</td>
@@ -263,7 +283,7 @@ function Board() {
                   );
                 })}
                 {shown.length === 0 && (
-                  <tr><td colSpan={11} style={{ ...cell, color: C.sub }}>{teamQuery.trim() ? `No games match “${teamQuery.trim()}”.` : 'No games in this filter.'}</td></tr>
+                  <tr><td colSpan={12} style={{ ...cell, color: C.sub }}>{teamQuery.trim() ? `No games match “${teamQuery.trim()}”.` : 'No games in this filter.'}</td></tr>
                 )}
               </tbody>
             </table>
@@ -276,6 +296,7 @@ function Board() {
         <p><b style={{ color: C.text }}>Model</b> is the weighted average of the PredictionTracker systems, weighted by how much their errors this season (blended with last season) beat the median system's. <b style={{ color: C.text }}>Key edge</b> is the gap to the line counted the NFL way: each whole number between the line and the model counts by how often games land there, so crossing 3 is worth about 3 points and crossing 5 about 1. <b style={{ color: C.text }}>Agree</b> is the share of system weight on the pick side.</p>
         <p><b style={{ color: C.green }}>Play</b>: key edge 2.0+ with 85%+ agreement. A Play is <b style={{ color: C.text }}>taken</b> the first time it qualifies, at that pull&rsquo;s line, and graded there at a flat 1 unit (win +1.0, lose −1.1), even if the line moves or a later pull drops it. <b style={{ color: C.gold }}>Lean</b>: key edge 1.5+ with 70%+, record only. Top spots are the best-ranked taken Plays.</p>
         <p>Why taken early: against the closing line the consensus has been a coin flip since 2022. The edge in the backtest came from disagreeing with the opener, and when that gap was 3+ the line moved toward the model in roughly 8 of 10 games that moved. Check the <b style={{ color: C.text }}>Line moving against pick</b> flag before playing: in the NFL that is often injury or weather news the systems have not priced.</p>
+        <p><b style={{ color: C.text }}>Tags</b> counts outside sites with a pick for this market (spread and moneyline for ATS, the game total for O/U): sites on the model&rsquo;s side / sites against it. <span style={{ color: C.green }}>Green</span> = more with the model, <span style={{ color: C.warn }}>red</span> = more against, <span style={{ color: C.gold }}>gold</span> = split. Each site counts once per side. See <a href="/nfl/research">Research</a> for the breakdown.</p>
         <p>Pulls run at about 8:15 AM, 12:15 PM and 4:45 PM ET daily, plus before the Sunday 1:00 and 4:05 windows. A game freezes at kickoff. Tap any game for the full breakdown.</p>
       </details>
 

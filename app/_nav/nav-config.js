@@ -55,6 +55,9 @@ export const NAV_BY_SPORT = {
       { key: 'board', label: 'Board', icon: 'board', pages: [
         { href: '/nfl/dashboard', label: 'Weekly Board' },
       ] },
+      { key: 'research', label: 'Research', icon: 'search', pages: [
+        { href: '/nfl/research', label: 'Outside Picks' },
+      ] },
       { key: 'results', label: 'Results', icon: 'results', pages: [
         { href: '/nfl/results', label: 'Results' },
       ] },
@@ -76,6 +79,9 @@ export const NAV_BY_SPORT = {
     tabs: [
       { key: 'board', label: 'Board', icon: 'board', pages: [
         { href: '/cbb/dashboard', label: 'Daily Board' },
+      ] },
+      { key: 'research', label: 'Research', icon: 'search', pages: [
+        { href: '/cbb/research', label: 'Outside Picks' },
       ] },
       { key: 'results', label: 'Results', icon: 'results', pages: [
         { href: '/cbb/results', label: 'Results' },

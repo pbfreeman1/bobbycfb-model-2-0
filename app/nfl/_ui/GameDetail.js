@@ -9,6 +9,7 @@
 // further down the panel.
 
 import { useEffect, useMemo, useState } from 'react';
+import ScoutGameSection from '../../_scout/ScoutGameSection';
 import {
   C, FH, FM, TIER_COLOR, buildRead, f1, fmtET, fmtKick, lineLabel, loadGameContext, modelLabel,
   pickLabel, signed, spreadFor, teamForm, units,
@@ -296,6 +297,16 @@ export default function GameDetail({ row, other, onClose }) {
               : <p style={{ fontSize: 12.5, color: C.sub, margin: 0 }}>No warning signs in the numbers.</p>}
           </div>
         </div>
+
+        <ScoutGameSection sport="nfl" gameId={row.game_id} names={{ home: row.home, away: row.away }}
+          model={{
+            side: (isTot ? other : row)?.pick_side ?? null,
+            total: (isTot ? row : other)?.pick_side ?? null,
+          }}
+          now={{
+            side: isTot ? (other ? other.line_now ?? other.line : null) : lineNow,
+            total: isTot ? lineNow : (other ? other.line_now ?? other.line : null),
+          }} />
 
         <div style={{ ...box, marginBottom: 12 }}>
           <div style={h3}>Where everyone sits</div>
