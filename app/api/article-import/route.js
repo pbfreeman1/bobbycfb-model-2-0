@@ -74,15 +74,22 @@ export async function POST(req) {
       });
     }
 
-    // 3. Ask Claude for structured picks (forced tool call)
+    // 3. Ask Claude for structured picks. Newer models reject a forced tool_choice
+    //    ("tool"/"any"), so ask with "auto" and an instruction to call the tool;
+    //    if a model does accept forcing, that path is kept as the first try.
     const { system, user, tool } = buildExtractionRequest(text, games, { sourceName: body.sourceName });
-    const ar = await fetch('https://api.anthropic.com/v1/messages', {
+    const ask = (toolChoice) => fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: MODEL, max_tokens: 16000, system, tools: [tool], tool_choice: { type: 'tool', name: tool.name }, messages: [{ role: 'user', content: user }] }),
+      body: JSON.stringify({ model: MODEL, max_tokens: 16000, system: `${system}\nAlways answer by calling the ${tool.name} tool exactly once with every pick; do not reply in prose.`, tools: [tool], tool_choice: toolChoice, messages: [{ role: 'user', content: user }] }),
       signal: AbortSignal.timeout(55000),
     });
-    const aj = await ar.json().catch(() => ({}));
+    let ar = await ask({ type: 'tool', name: tool.name });
+    let aj = await ar.json().catch(() => ({}));
+    if (ar.status === 400 && /tool_choice/i.test(aj?.error?.message || '')) {
+      ar = await ask({ type: 'auto' });
+      aj = await ar.json().catch(() => ({}));
+    }
     if (!ar.ok) return Response.json({ ok: false, error: `Anthropic API ${ar.status}: ${aj?.error?.message || 'request failed'}` }, { status: 502 });
     const block = (aj.content || []).find((b) => b.type === 'tool_use');
     if (!block) return Response.json({ ok: false, error: 'The model returned no picks block.' }, { status: 502 });
