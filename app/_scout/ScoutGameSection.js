@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { C, FM } from '../../lib/nfl-board';
 import { gamePicks, describePick } from '../../lib/scout-client';
-import { lineWorseBy, sideLabel, spreadFor } from '../../lib/scout-research';
+import { lineWorseBy, sideLabel, siteSides, spreadFor } from '../../lib/scout-research';
 
 const box = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: '12px 14px' };
 const h3 = { fontSize: 11, textTransform: 'uppercase', letterSpacing: '.06em', color: C.sub, fontWeight: 700, marginBottom: 8 };
@@ -15,7 +15,7 @@ const h3 = { fontSize: 11, textTransform: 'uppercase', letterSpacing: '.06em', c
 const grpOf = (p) => (p.period !== 'full' || p.market === 'team_total' ? 'other' : p.market === 'total' ? 'total' : 'side');
 
 function SideBar({ label, n, total, color, model }) {
-  const w = total ? Math.max(6, (100 * n) / total) : 0;
+  const w = total && n ? Math.max(6, (100 * n) / total) : 0;
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,170px) 1fr 70px', gap: 8, alignItems: 'center', fontSize: 12.5, marginBottom: 4 }}>
       <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
@@ -47,8 +47,6 @@ export default function ScoutGameSection({ sport, gameId, names, model = {}, now
   if (err) return <div style={{ ...box, marginBottom: 12, fontSize: 12, color: C.warn }}>Outside picks did not load: {err}</div>;
   if (!picks) return <div style={{ ...box, marginBottom: 12, fontSize: 12, color: C.sub }}>Loading outside picks…</div>;
 
-  const sideSites = (list, side) => new Set(list.filter((p) => p.side === side).map((p) => p.source_name.toLowerCase())).size;
-
   return (
     <div style={{ ...box, marginBottom: 12 }}>
       <div style={h3}>Outside picks · {picks.length ? `${picks.length} stored` : 'none yet'}</div>
@@ -63,7 +61,8 @@ export default function ScoutGameSection({ sport, gameId, names, model = {}, now
         const sides = g === 'side' ? ['away', 'home'] : g === 'total' ? ['over', 'under'] : [];
         const m = g === 'side' ? model.side : g === 'total' ? model.total : null;
         const nowLine = g === 'side' ? now.side : g === 'total' ? now.total : null;
-        const counts = sides.map((s) => sideSites(list, s));
+        const ss = siteSides(list, sides);
+        const counts = sides.map((s) => ss.counts[s]);
         const total = counts.reduce((a, b) => a + b, 0);
         return (
           <div key={g} style={{ marginTop: 10 }}>
@@ -75,6 +74,9 @@ export default function ScoutGameSection({ sport, gameId, names, model = {}, now
                 label={g === 'side' ? `${s === 'home' ? names.home : names.away} ${spreadFor(s, nowLine)}`.trim() : sideLabel({}, s, nowLine)}
                 color={m ? (m === s ? C.green : C.warn) : C.blue} />
             ))}
+            {ss.split.length > 0 && (
+              <div style={{ fontSize: 11.5, color: C.sub, margin: '2px 0 4px' }}>Split evenly, not counted: {ss.split.join(', ')}</div>
+            )}
             <div style={{ marginTop: 6 }}>
               {list.map((p) => {
                 const worse = p.status === 'ok' || p.status === 'check'
@@ -103,7 +105,7 @@ export default function ScoutGameSection({ sport, gameId, names, model = {}, now
         );
       })}
       <p style={{ fontSize: 11, color: C.sub, margin: '10px 0 0' }}>
-        Green = the model&apos;s side, red = against it. Sites are counted once per side however many of their experts picked it.
+        Green = the model&apos;s side, red = against it. A site counts once, toward the side most of its experts picked (a site split evenly counts on neither).
         &ldquo;Line worse now&rdquo; means the source got a better number than is available now.
       </p>
     </div>

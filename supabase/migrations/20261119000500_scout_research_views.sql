@@ -4,8 +4,8 @@
 -- Groups: 'side' = spread and moneyline picks on a team (both say "this team"),
 --         'total' = game over/under. Full-game picks only; team totals and
 --         halves stay in the drawer's pick list but are not counted.
--- Sources are counted by distinct site (source_name), so a site with eight
--- experts on one side counts once there; experts are counted separately.
+-- Sources are counted by site (source_name): once, toward the side most of the
+-- site's experts picked. Experts are counted separately.
 
 -- One row per countable pick, graded at the line the source took (spreads and
 -- totals) or straight up (moneylines). Units: spread/total win +1, lose -1.1;
@@ -56,21 +56,33 @@ select r.id, r.sport, r.game_id, r.game_date, r.grp, r.market, r.side, r.line, r
        end as units
   from r;
 
--- Sources on each side of each game.
+-- Sources on each side of each game. A site counts toward the side most of
+-- its experts picked; a site split evenly (e.g. CBS's 8-expert grid going 4-4)
+-- counts on neither side and is listed in split_sites.
 create or replace view scout_side_consensus as
-  select sport, game_id, max(game_date) as game_date, grp, side,
-         count(distinct lower(source_name)) as sources,
-         count(distinct lower(source_name) || '|' || scout_expert_key(expert)) as experts,
-         count(*) as picks,
-         array_agg(distinct source_name order by source_name) as source_names,
-         min(home_line) filter (where market = 'spread') as min_home_line,
-         max(home_line) filter (where market = 'spread') as max_home_line,
-         min(line) filter (where market = 'total') as min_total,
-         max(line) filter (where market = 'total') as max_total,
-         bool_or(origin = 'agent') as has_agent,
-         max(created_at) as last_at
+with e as (
+  select sport, game_id, grp, side, lower(source_name) as sk, min(source_name) as source_name,
+         count(distinct scout_expert_key(expert)) as n_exp, count(*) as picks,
+         min(home_line) filter (where market = 'spread') as mn_h, max(home_line) filter (where market = 'spread') as mx_h,
+         min(line) filter (where market = 'total') as mn_t, max(line) filter (where market = 'total') as mx_t,
+         bool_or(origin = 'agent') as agent, max(created_at) as last_at, max(game_date) as game_date
     from scout_pick_grades
-   group by sport, game_id, grp, side;
+   group by sport, game_id, grp, side, lower(source_name)
+), t as (
+  select e.*, sum(n_exp) over (partition by sport, game_id, grp, sk) as site_total from e
+)
+select sport, game_id, max(game_date) as game_date, grp, side,
+       count(*) filter (where 2 * n_exp > site_total) as sources,
+       sum(n_exp)::bigint as experts,
+       sum(picks)::bigint as picks,
+       coalesce(array_agg(source_name order by source_name) filter (where 2 * n_exp > site_total), '{}') as source_names,
+       min(mn_h) as min_home_line, max(mx_h) as max_home_line,
+       min(mn_t) as min_total, max(mx_t) as max_total,
+       bool_or(agent) as has_agent,
+       max(last_at) as last_at,
+       coalesce(array_agg(source_name order by source_name) filter (where 2 * n_exp <= site_total), '{}') as split_sites
+  from t
+ group by sport, game_id, grp, side;
 
 -- One row per game and group: the crowd's side, the model's side, the market
 -- line, and how the crowd's side did against that line.

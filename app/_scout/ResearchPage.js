@@ -286,7 +286,7 @@ export default function ResearchPage({ sport }) {
 
           <details style={{ marginTop: 22, fontSize: 13, color: C.sub, lineHeight: 1.6 }}>
             <summary style={{ cursor: 'pointer', color: C.text }}>How to read this page</summary>
-            <p><b style={{ color: C.text }}>Sites</b> are counted once per side however many of their experts picked it, so a site that picks every game (CBS&apos;s expert grid, SI&apos;s &ldquo;every game&rdquo; ATS picks) cannot stack up a side on its own. &ldquo;3–1&rdquo; means 3 sites on the crowd&apos;s side and 1 on the other.</p>
+            <p><b style={{ color: C.text }}>Sites</b> count once, toward the side most of their experts picked; a site whose experts split evenly (CBS&apos;s expert grid often does) counts on neither. So no single site can stack up a side. &ldquo;3–1&rdquo; means 3 sites on the crowd&apos;s side and 1 on the other. In the NFL most sites pick every game, so close splits are normal there; the stronger signal is a lopsided count.</p>
             <p><b style={{ color: C.text }}>Sides</b> combine spread and moneyline picks on a team; <b style={{ color: C.text }}>Totals</b> are full-game over/unders. Halves and team totals are listed in each game&apos;s drawer on the board but not counted here.</p>
             <p><b style={{ color: C.text }}>Line move</b> is how far the market has moved toward (+) or away from (-) the crowd&apos;s side since the opener. Source records grade each pick at the number the source gave (moneylines straight up, units only when odds were stated).</p>
             <p>This is research, not a betting signal yet: none of these patterns has a forward record. The score that combines them with the model comes after enough games are graded.</p>
