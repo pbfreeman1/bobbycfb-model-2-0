@@ -26,6 +26,9 @@ const SORTS = {
   game: { label: 'Matchup', fn: (a, b) => a.home.localeCompare(b.home) },
 };
 
+// Case- and punctuation-insensitive; matches full names or abbreviations.
+const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9 ]/g, '');
+
 const cell = { padding: '9px 10px', borderBottom: `1px solid ${C.border}`, fontSize: 13, whiteSpace: 'nowrap' };
 const head = { ...cell, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.05em', color: C.sub, textAlign: 'left' };
 const btn = {
@@ -98,6 +101,7 @@ function Board() {
   const [error, setError] = useState(null);
   const [sort, setSort] = useState('rank');
   const [tierFilter, setTierFilter] = useState('all');
+  const [teamQuery, setTeamQuery] = useState('');
   const [open, setOpen] = useState(null);
   const [tick, setTick] = useState(0);
 
@@ -127,8 +131,10 @@ function Board() {
     const base = tierFilter === 'all' ? mRows
       : tierFilter === 'Taken' ? mRows.filter((r) => r.taken_side)
         : mRows.filter((r) => r.tier === tierFilter);
-    return [...base].sort(SORTS[sort].fn);
-  }, [mRows, sort, tierFilter]);
+    const q = norm(teamQuery).trim();
+    const hit = (r) => !q || [r.home, r.away, r.home_abbr, r.away_abbr].some((t) => norm(t).includes(q));
+    return base.filter(hit).sort(SORTS[sort].fn);
+  }, [mRows, sort, tierFilter, teamQuery]);
 
   const count = (m) => rows.filter((r) => r.market === m && r.taken_side).length;
   const leans = mRows.filter((r) => r.tier === 'Lean' && !r.taken_side).length;
@@ -207,6 +213,9 @@ function Board() {
               </button>
             ))}
             <span style={{ flex: 1 }} />
+            <input type="search" value={teamQuery} onChange={(e) => setTeamQuery(e.target.value)}
+              placeholder="Search team…" aria-label="Search by team"
+              style={{ ...btn, padding: '4px 10px', fontSize: 12, width: 170, cursor: 'text', colorScheme: 'dark' }} />
             <label style={{ fontSize: 12, color: C.sub }}>Sort{' '}
               <select value={sort} onChange={(e) => setSort(e.target.value)} style={{ ...btn, padding: '4px 8px', fontSize: 12 }}>
                 {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
@@ -253,6 +262,9 @@ function Board() {
                     </tr>
                   );
                 })}
+                {shown.length === 0 && (
+                  <tr><td colSpan={11} style={{ ...cell, color: C.sub }}>{teamQuery.trim() ? `No games match “${teamQuery.trim()}”.` : 'No games in this filter.'}</td></tr>
+                )}
               </tbody>
             </table>
           </div>

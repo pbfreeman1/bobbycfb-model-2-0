@@ -21,6 +21,9 @@ const SORTS = {
   game: { label: 'Matchup', fn: (a, b) => a.home.localeCompare(b.home) },
 };
 
+// Case- and punctuation-insensitive, so "st johns" finds "St. John's".
+const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9 ]/g, '');
+
 const cell = { padding: '9px 10px', borderBottom: `1px solid ${C.border}`, fontSize: 13, whiteSpace: 'nowrap' };
 const head = { ...cell, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.05em', color: C.sub, textAlign: 'left' };
 const btn = {
@@ -79,6 +82,7 @@ export default function CbbDashboard() {
   const [error, setError] = useState(null);
   const [sort, setSort] = useState('rank');
   const [tierFilter, setTierFilter] = useState('all');
+  const [teamQuery, setTeamQuery] = useState('');
   const [open, setOpen] = useState(null);
 
   useEffect(() => {
@@ -106,9 +110,11 @@ export default function CbbDashboard() {
   const closeDetail = useCallback(() => setOpen(null), []);
   const top = useMemo(() => [...plays].sort(SORTS.rank.fn).slice(0, 5), [plays]);
   const shown = useMemo(() => {
-    const base = tierFilter === 'all' ? rows : rows.filter((r) => r.tier === tierFilter);
+    const q = norm(teamQuery).trim();
+    const base = (tierFilter === 'all' ? rows : rows.filter((r) => r.tier === tierFilter))
+      .filter((r) => !q || norm(r.home).includes(q) || norm(r.road).includes(q));
     return [...base].sort(SORTS[sort].fn);
-  }, [rows, sort, tierFilter]);
+  }, [rows, sort, tierFilter, teamQuery]);
 
   
   const leans = rows.filter((r) => r.tier === 'Lean').length;
@@ -173,6 +179,9 @@ export default function CbbDashboard() {
               </button>
             ))}
             <span style={{ flex: 1 }} />
+            <input type="search" value={teamQuery} onChange={(e) => setTeamQuery(e.target.value)}
+              placeholder="Search team…" aria-label="Search by team"
+              style={{ ...btn, padding: '4px 10px', fontSize: 12, width: 170, cursor: 'text', colorScheme: 'dark' }} />
             <label style={{ fontSize: 12, color: C.sub }}>Sort{' '}
               <select value={sort} onChange={(e) => setSort(e.target.value)} style={{ ...btn, padding: '4px 8px', fontSize: 12 }}>
                 {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
@@ -208,6 +217,9 @@ export default function CbbDashboard() {
                     </tr>
 
                 ))}
+                {shown.length === 0 && (
+                  <tr><td colSpan={12} style={{ ...cell, color: C.sub }}>{teamQuery.trim() ? `No games match “${teamQuery.trim()}”.` : 'No games in this filter.'}</td></tr>
+                )}
               </tbody>
             </table>
           </div>
