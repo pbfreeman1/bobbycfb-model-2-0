@@ -8,6 +8,7 @@
 // form and rest, and how similar spots have done this season.
 
 import { useEffect, useMemo, useState } from 'react';
+import ScoutGameSection from '../../_scout/ScoutGameSection';
 import {
   C, FH, FM, EDGE_B, EDGE_LABEL, OPEN_B, OPEN_LABEL, TIER_COLOR, VOTE_B, VOTE_LABEL, f1, fmtDay, fmtET,
   loadGameContext, spreadFor, teamForm, units,
@@ -306,6 +307,10 @@ export default function GameDetail({ row, onClose }) {
             {err && <p style={{ fontSize: 11.5, color: C.warn, margin: 0 }}>History did not load: {err}</p>}
           </div>
         </div>
+
+        {/* outside picks */}
+        <ScoutGameSection sport="cbb" gameId={row.game_id} names={{ home: row.home, away: row.road }}
+          model={{ side: row.edge > 0 ? 'home' : row.edge < 0 ? 'away' : null }} now={{ side: row.line }} />
 
         {/* number line */}
         <div style={{ ...box, marginBottom: 12 }}>

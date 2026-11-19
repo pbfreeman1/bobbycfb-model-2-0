@@ -9,6 +9,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import RefreshButton from '../_ui/RefreshButton';
 import GameDetail from '../_ui/GameDetail';
+import TagsCell from '../../_scout/TagsCell';
+import { crowdFor } from '../../../lib/scout-client';
+import { tagSummary } from '../../../lib/scout-research';
 import {
   C, FH, FM, TIER_COLOR, f1, fmtDay, fmtET, lastRun, latestBoardDate, loadBoard, shiftDate, spreadFor, todayET, units,
 } from '../../../lib/cbb';
@@ -20,7 +23,10 @@ const SORTS = {
   spread: { label: 'Tightest', fn: (a, b) => (a.std_dev ?? 99) - (b.std_dev ?? 99) },
   tip: { label: 'Tip time', fn: (a, b) => String(a.tip_time ?? '9999').localeCompare(String(b.tip_time ?? '9999')) },
   game: { label: 'Matchup', fn: (a, b) => a.home.localeCompare(b.home) },
+  tags: { label: 'Outside picks', fn: (a, b) => (b._tags?.total ?? 0) - (a._tags?.total ?? 0) || (b._tags?.withN ?? 0) - (a._tags?.withN ?? 0) },
 };
+
+const modelSide = (r) => (r.edge > 0 ? 'home' : r.edge < 0 ? 'away' : null);
 
 // Case- and punctuation-insensitive, so "st johns" finds "St. John's".
 // Tip time in ET, from ESPN. Blank when ESPN has no time for the game.
@@ -59,6 +65,7 @@ function Flags({ flags }) {
 }
 
 function TopSpot({ row, n, onOpen }) {
+  const t = row._tags;
   return (
     <button onClick={onOpen} title="Open the full breakdown" style={{ textAlign: 'left', color: C.text, cursor: 'pointer', background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.green}`, borderRadius: 8, padding: '12px 14px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
@@ -75,6 +82,11 @@ function TopSpot({ row, n, onOpen }) {
         <span>Agree {f1(100 * row.vote_share, 0)}%</span>
         <span>Spread of models {f1(row.std_dev)}</span>
       </div>
+      {t && t.withN !== null && (
+        <div style={{ ...FM, fontSize: 11.5, marginTop: 6, color: t.tone === 'with' ? C.green : t.tone === 'against' ? C.warn : C.gold }}>
+          Outside picks: {t.withN} with · {t.againstN} against
+        </div>
+      )}
       <div style={{ marginTop: 8 }}><Flags flags={row.flags} /></div>
     </button>
   );
@@ -90,6 +102,7 @@ export default function CbbDashboard() {
   const [tierFilter, setTierFilter] = useState('all');
   const [teamQuery, setTeamQuery] = useState('');
   const [open, setOpen] = useState(null);
+  const [crowd, setCrowd] = useState(new Map());
 
   useEffect(() => {
     latestBoardDate().then(setDate).catch(() => setDate(todayET()));
@@ -105,22 +118,27 @@ export default function CbbDashboard() {
     setLoading(true);
     setError(null);
     loadBoard(date)
-      .then((r) => { if (live) setRows(r); })
+      .then((r) => {
+        if (!live) return;
+        setRows(r);
+        crowdFor('cbb', r.map((x) => x.game_id)).then((m) => { if (live) setCrowd(m); }).catch(() => {});
+      })
       .catch((e) => { if (live) setError(e.message); })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
   }, [date, tick]);
 
-  const plays = useMemo(() => rows.filter((r) => r.tier === 'Play'), [rows]);
-  const openRow = open ? rows.find((r) => r.game_id === open) || null : null;
+  const tagged = useMemo(() => rows.map((r) => ({ ...r, _tags: tagSummary(crowd.get(`${r.game_id}|side`), modelSide(r)) })), [rows, crowd]);
+  const plays = useMemo(() => tagged.filter((r) => r.tier === 'Play'), [tagged]);
+  const openRow = open ? tagged.find((r) => r.game_id === open) || null : null;
   const closeDetail = useCallback(() => setOpen(null), []);
   const top = useMemo(() => [...plays].sort(SORTS.rank.fn).slice(0, 5), [plays]);
   const shown = useMemo(() => {
     const q = norm(teamQuery).trim();
-    const base = (tierFilter === 'all' ? rows : rows.filter((r) => r.tier === tierFilter))
+    const base = (tierFilter === 'all' ? tagged : tagged.filter((r) => r.tier === tierFilter))
       .filter((r) => !q || norm(r.home).includes(q) || norm(r.road).includes(q));
     return [...base].sort(SORTS[sort].fn);
-  }, [rows, sort, tierFilter, teamQuery]);
+  }, [tagged, sort, tierFilter, teamQuery]);
 
   
   const leans = rows.filter((r) => r.tier === 'Lean').length;
@@ -198,7 +216,7 @@ export default function CbbDashboard() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  {['#', 'Tip (ET)', 'Matchup', 'Tier', 'Pick', 'Line', 'Open', 'Model', 'Edge', 'Agree', 'SD', 'Flags', 'Final'].map((h) => (
+                  {['#', 'Tip (ET)', 'Matchup', 'Tier', 'Pick', 'Tags', 'Line', 'Open', 'Model', 'Edge', 'Agree', 'SD', 'Flags', 'Final'].map((h) => (
                     <th key={h} style={head}>{h}</th>
                   ))}
                 </tr>
@@ -211,6 +229,7 @@ export default function CbbDashboard() {
                       <td style={cell}>{r.road} @ {r.home}{r.neutral ? ' (N)' : ''}</td>
                       <td style={{ ...cell, fontWeight: 700, color: TIER_COLOR[r.tier] || C.sub }}>{r.tier || '—'}</td>
                       <td style={{ ...cell, fontWeight: 600 }}>{r.pick_team ? `${r.pick_team} ${spreadFor(r.pick_side, r.line)}` : '—'}</td>
+                      <td style={cell}><TagsCell summary={r._tags} labelFor={(s) => (s === 'home' ? r.home : r.road)} /></td>
                       <td style={{ ...cell, ...FM }}>{r.home} {spreadFor('home', r.line)}</td>
                       <td style={{ ...cell, ...FM, color: C.sub }}>{spreadFor('home', r.open_line)}</td>
                       <td style={{ ...cell, ...FM }}>{spreadFor('home', r.consensus)}</td>
@@ -225,7 +244,7 @@ export default function CbbDashboard() {
 
                 ))}
                 {shown.length === 0 && (
-                  <tr><td colSpan={13} style={{ ...cell, color: C.sub }}>{teamQuery.trim() ? `No games match “${teamQuery.trim()}”.` : 'No games in this filter.'}</td></tr>
+                  <tr><td colSpan={14} style={{ ...cell, color: C.sub }}>{teamQuery.trim() ? `No games match “${teamQuery.trim()}”.` : 'No games in this filter.'}</td></tr>
                 )}
               </tbody>
             </table>
@@ -237,6 +256,7 @@ export default function CbbDashboard() {
         <summary style={{ cursor: 'pointer', color: C.text }}>How to read this board</summary>
         <p><b style={{ color: C.text }}>Model</b> is the weighted average of the PredictionTracker systems that have beaten the median system on error this season. <b style={{ color: C.text }}>Edge</b> is the gap between that number and the line. <b style={{ color: C.text }}>Agree</b> is the share of system weight on the pick side. <b style={{ color: C.text }}>SD</b> is how spread out the systems are.</p>
         <p><b style={{ color: C.green }}>Play</b>: edge of 1.5+ with 70%+ agreement, tracked at a flat 1 unit (win +1.0, lose -1.1). <b style={{ color: C.gold }}>Lean</b>: edge of 1.0+ with 60%+ agreement, record only. Top spots are the five highest-ranked plays; rank favors agreement and tight systems and caps edge at 4 points.</p>
+        <p><b style={{ color: C.text }}>Tags</b> counts outside sites with a pick on this game (spread or moneyline): sites on the model&rsquo;s side / sites against it. <span style={{ color: C.green }}>Green</span> = more with the model, <span style={{ color: C.warn }}>red</span> = more against, <span style={{ color: C.gold }}>gold</span> = split. Each site counts once, toward the side most of its experts picked. See <a href="/cbb/research">Research</a> for the breakdown.</p>
         <p>Lines and predictions freeze at noon ET on game day. Results are graded the next morning against the frozen line. Tap any game for the full breakdown: the read, the opening-line gap, every system with its season accuracy, both teams&rsquo; form and rest, and how similar spots have done.</p>
       </details>
 
