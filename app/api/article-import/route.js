@@ -1,12 +1,15 @@
 import { createClient } from '@supabase/supabase-js';
-import { buildExtractionRequest, htmlToArticleText, isAllowedUrl, resolvePicks, MAX_ARTICLE_CHARS } from '../../../lib/article-import';
+import { buildExtractionRequest, htmlToArticleText, isAllowedUrl, resolvePicks, wirePick, wireBet, wireSkipped, MAX_ARTICLE_CHARS } from '../../../lib/article-import';
 import { looksLikePickSheet, resolveSheetPicks } from '../../../lib/sportsline-sheet';
 import { looksLikeExpertPicks, resolveExpertPicks } from '../../../lib/sportsline-experts';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
-const MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-5-5';
+// Sonnet: Haiku missed heading-style picks ("Texas Tech at Baylor (+3.5)") and
+// pulled teams from the analysis. An article is ~10-20K characters, so the cost
+// difference per import is small. ANTHROPIC_MODEL still overrides.
+const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
 
 // POST /api/article-import  { season, week, url? | text?, sourceName? }
 // Reads one betting article with Claude and returns the picks matched to that
@@ -56,7 +59,7 @@ export async function POST(req) {
         ok: true, mode: 'sportsline-sheet', rawCount: picks.length, stopReason: null, chars: String(body.text).length,
         preview: `SportsLine pick sheet: ${rows} games read, A/A+ simulation picks only.`, truncated: false, model: null, usage: null,
         picks: picks.map((p) => ({ game_id: p.game.id, type: p.type, side: p.side, line: p.line, experts: p.experts, text: p.text })),
-        skipped,
+        sideBets: [], skipped,
       });
     }
 
@@ -67,7 +70,7 @@ export async function POST(req) {
         ok: true, mode: 'sportsline-experts', rawCount: picks.length, stopReason: null, chars: String(body.text).length,
         preview: `SportsLine expert picks: ${cards} cards read.`, truncated: false, model: null, usage: null,
         picks: picks.map((p) => ({ game_id: p.game.id, type: p.type, side: p.side, line: p.line, experts: p.experts, text: p.text })),
-        skipped,
+        sideBets: [], skipped,
       });
     }
 
@@ -87,11 +90,12 @@ export async function POST(req) {
     // The model occasionally returns the array as a JSON string; accept both.
     let rawPicks = block.input?.picks;
     if (typeof rawPicks === 'string') { try { rawPicks = JSON.parse(rawPicks); } catch { rawPicks = []; } }
-    const { picks, skipped } = resolvePicks(rawPicks, games);
+    const { picks, sideBets, skipped } = resolvePicks(rawPicks, games);
     return Response.json({
       ok: true, rawCount: Array.isArray(rawPicks) ? rawPicks.length : 0, stopReason: aj.stop_reason || null, chars: text.length, preview: text.slice(0, 500), truncated: text.length >= MAX_ARTICLE_CHARS, model: MODEL, usage: aj.usage || null,
-      picks: picks.map((p) => ({ game_id: p.game.id, type: p.type, side: p.side, line: p.line, experts: p.experts, text: p.text })),
-      skipped,
+      picks: picks.map(wirePick),
+      sideBets: sideBets.map(wireBet),
+      skipped: skipped.map(wireSkipped),
     });
   } catch (e) {
     return Response.json({ ok: false, error: String(e.message || e) }, { status: 500 });

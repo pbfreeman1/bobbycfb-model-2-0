@@ -6,6 +6,10 @@ import { teamSpread, fmtSigned } from '../../../lib/research-report';
 import SourcePicker, { useResearchSources } from '../_research/SourcePicker';
 import KamImport from '../_research/KamImport';
 import ArticleImport from '../_research/ArticleImport';
+import { shortTeam } from '../../../lib/team-short';
+import {
+  MANUAL_SIDE_TYPES, parseSideType, sideChoices, splitSide, validateSideBet, buildSideBetRow, groupSideBets, describeSideBet,
+} from '../../../lib/side-bets';
 
 const SB_HDR = { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' };
 
@@ -14,6 +18,7 @@ export default function Research() {
   const [week, setWeek] = useState(null); // resolved to the latest week with games below
   const [games, setGames] = useState([]);
   const [tallies, setTallies] = useState([]);   // research_picks rows
+  const [sideTallies, setSideTallies] = useState([]); // research_side_bets rows (not graded)
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -26,6 +31,9 @@ export default function Research() {
   const [rank, setRank] = useState('');
   const [conviction, setConviction] = useState(null);
   const [note, setNote] = useState('');
+  const [betLine, setBetLine] = useState('');
+  const [betOdds, setBetOdds] = useState('');
+  const sideType = parseSideType(pickType); // null for graded spread / total
   const { sources, create } = useResearchSources();
   const source = sources.find((x) => x.id === sourceId) || null;
 
@@ -36,12 +44,14 @@ export default function Research() {
   const load = async () => {
     setLoading(true); setError(null);
     try {
-      const [gData, tData] = await Promise.all([
+      const [gData, tData, sData] = await Promise.all([
         sbFetch(`games?select=id,home_team,away_team,over_under,current_line,game_metrics(suggested_side,suggested_line)&season=eq.${season}&week=eq.${week}&order=home_team.asc`),
         sbFetch(`research_picks?select=*&season=eq.${season}&week=eq.${week}&order=created_at.asc`),
+        sbFetch(`research_side_bets?select=*&season=eq.${season}&week=eq.${week}&order=created_at.asc`).catch(() => []),
       ]);
       setGames(gData);
       setTallies(tData);
+      setSideTallies(sData);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   };
@@ -59,6 +69,17 @@ export default function Research() {
     if (!selGame || !game) return;
     setSaving(true); setError(null);
     try {
+      if (sideType) {
+        const { team_side, ou_side } = splitSide(sideType.market, pickSide);
+        const bet = { ...sideType, team_side, ou_side, line: betLine, odds: betOdds };
+        const err = validateSideBet(bet);
+        if (err) throw new Error(err);
+        const row = buildSideBetRow({ game, season, week, ...bet, source, note });
+        await sbFetch('research_side_bets', { method: 'POST', body: JSON.stringify(row) });
+        setNote(''); setBetLine(''); setBetOdds(''); setSelGame('');
+        load();
+        return;
+      }
       const body = buildTagPayload({ game, season, week, pickType, pickSide, source, rank, conviction, note });
       const res = await fetch(`${SUPABASE_URL}/rest/v1/research_picks`, { method: 'POST', headers: SB_HDR, body: JSON.stringify(body) });
       if (!res.ok) throw new Error(`Save failed (${res.status}): ${await res.text().catch(() => '')}`);
@@ -69,6 +90,17 @@ export default function Research() {
     } catch (e) { setError(e.message); }
     finally { setSaving(false); }
   }
+
+  async function removeSideBet(id) {
+    setSaving(true);
+    try {
+      await fetch(`${SUPABASE_URL}/rest/v1/research_side_bets?id=eq.${id}`, { method: 'DELETE', headers: SB_HDR });
+      load();
+    } finally { setSaving(false); }
+  }
+
+  const sideGroups = useMemo(() => groupSideBets(sideTallies), [sideTallies]);
+  const gameById = useMemo(() => new Map(games.map((g) => [g.id, g])), [games]);
 
   async function removeTally(id) {
     setSaving(true);
@@ -122,7 +154,7 @@ export default function Research() {
 
       {week != null && !loading && (
         <ArticleImport
-          season={season} week={week} games={games} tallies={tallies}
+          season={season} week={week} games={games} tallies={tallies} sideTallies={sideTallies}
           sources={sources.filter((x) => x.name !== 'KAM')}
           onDone={load} inputStyle={inp} labelStyle={lbl}
         />
@@ -142,7 +174,12 @@ export default function Research() {
           <div>
             <label style={lbl}>Side</label>
             <select style={inp} value={pickSide} onChange={e => setPickSide(e.target.value)}>
-              {selectedGame ? (
+              {sideType ? sideChoices(sideType.market).map((c) => {
+                const [a, b] = c.split(':');
+                const nm = (sd) => (selectedGame ? (sd === 'home' ? selectedGame.home_team : selectedGame.away_team) : sd === 'home' ? 'Home' : 'Away');
+                const lbl = a === 'over' ? 'Over' : a === 'under' ? 'Under' : `${nm(a)}${b ? ` ${b === 'over' ? 'Over' : 'Under'}` : ''}`;
+                return <option key={c} value={c}>{lbl}</option>;
+              }) : selectedGame ? (
                 <>
                   <option value="home">{selectedGame.home_team} {fmtSigned(teamSpread(selectedGame.current_line, 'home'))}</option>
                   <option value="away">{selectedGame.away_team} {fmtSigned(teamSpread(selectedGame.current_line, 'away'))}</option>
@@ -161,11 +198,30 @@ export default function Research() {
           </div>
           <div>
             <label style={lbl}>Type</label>
-            <select style={inp} value={pickType} onChange={e => { const t = e.target.value; setPickType(t); setPickSide(t === 'total' ? 'over' : 'home'); }}>
+            <select style={inp} value={pickType} onChange={e => {
+              const t = e.target.value; setPickType(t);
+              const st = parseSideType(t);
+              setPickSide(st ? sideChoices(st.market)[0] : t === 'total' ? 'over' : 'home');
+            }}>
               <option value="spread">Spread (ATS)</option>
               <option value="total">Total (O/U)</option>
+              <optgroup label="Other bets (not graded)">
+                {MANUAL_SIDE_TYPES.map((t) => <option key={t.v} value={t.v}>{t.label}</option>)}
+              </optgroup>
             </select>
           </div>
+          {sideType && sideType.market !== 'moneyline' && (
+            <div>
+              <label style={lbl}>{sideType.market === 'spread' ? 'Spread' : 'Number'}</label>
+              <input style={{ ...inp, width: 70 }} inputMode="decimal" placeholder={sideType.market === 'spread' ? '-3.5' : '23.5'} value={betLine} onChange={e => setBetLine(e.target.value)} />
+            </div>
+          )}
+          {sideType && (
+            <div>
+              <label style={lbl}>Odds</label>
+              <input style={{ ...inp, width: 70 }} inputMode="numeric" placeholder={sideType.market === 'moneyline' ? '+142' : 'opt.'} value={betOdds} onChange={e => setBetOdds(e.target.value)} />
+            </div>
+          )}
           <div style={{ flex: 3, minWidth: 260 }}>
             <SourcePicker
               sources={sources} create={create} value={sourceId} onChange={setSourceId}
@@ -189,6 +245,39 @@ export default function Research() {
           <div style={{ fontSize: 12, color: '#5b6272', marginBottom: 10 }}>
             {tallies.length} total tally entries across {games.filter(g => sorted.find(a => a.game.id === g.id && a.entries.length > 0)).length} games this week
           </div>
+
+          {sideGroups.length > 0 && (
+            <div className="card" style={{ marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>Other bets</div>
+                <div style={{ fontSize: 11, color: '#5b6272' }}>ML, team totals, halves, quarters · not graded · most sources first</div>
+              </div>
+              {sideGroups.map((grp) => {
+                const g = gameById.get(grp.game_id);
+                if (!g) return null;
+                const teamFor = (sd) => shortTeam(sd === 'home' ? g.home_team : g.away_team);
+                const nums = grp.min == null ? '' : grp.min === grp.max ? '' : grp.market === 'moneyline' ? ` (${grp.min > 0 ? '+' : ''}${grp.min} to ${grp.max > 0 ? '+' : ''}${grp.max})` : ` (${grp.min} to ${grp.max})`;
+                const head = grp.min != null && grp.min === grp.max
+                  ? describeSideBet({ ...grp, line: grp.market === 'moneyline' ? null : grp.min, odds: grp.market === 'moneyline' ? grp.min : null }, teamFor)
+                  : describeSideBet(grp, teamFor, { withLine: false });
+                return (
+                  <div key={grp.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderTop: '1px solid #1e2535', flexWrap: 'wrap' }}>
+                    <span style={{ minWidth: 26, textAlign: 'center', fontWeight: 800, fontSize: 15, color: grp.count >= 2 ? '#38bd94' : '#5b6272' }}>{grp.count}</span>
+                    <span style={{ fontWeight: 700, fontSize: 13 }}>{head}{nums}</span>
+                    <span style={{ fontSize: 12, color: '#8a92a3' }}>{shortTeam(g.away_team)} @ {shortTeam(g.home_team)}</span>
+                    {grp.opposed && <span style={{ fontSize: 10.5, color: '#e5a64f', border: '1px solid #e5a64f55', borderRadius: 4, padding: '0 5px' }}>split</span>}
+                    <span style={{ flex: 1 }} />
+                    {grp.rows.map((r) => (
+                      <span key={r.id} title={r.note || ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: '#0b0e14', border: '1px solid #2a3042', borderRadius: 6, padding: '2px 8px', fontSize: 11.5, color: '#8a92a3' }}>
+                        {r.source_label || 'Unlabeled'}
+                        <button onClick={() => removeSideBet(r.id)} disabled={saving} aria-label="Remove other bet" style={{ background: 'none', border: 'none', color: '#3a404e', cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1 }}>✕</button>
+                      </span>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* Per-game tally cards */}
           {sorted.filter(a => a.entries.length > 0).length === 0 && (

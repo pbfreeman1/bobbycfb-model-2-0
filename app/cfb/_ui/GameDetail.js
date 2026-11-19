@@ -18,6 +18,7 @@ import { TIER_COLOR, TIER_UNITS, defFor, fmtSpread, nearMiss, teamLine, tierChec
 import { buildReport, normalizeSources, recStr, recPct } from '../../../lib/research-report';
 import { pickDescription, researchDescription } from '../../../lib/bet-types';
 import { shortTeam } from '../../../lib/team-short';
+import { groupSideBets, describeSideBet } from '../../../lib/side-bets';
 
 const FH = { fontFamily: "'Space Grotesk', 'Segoe UI', sans-serif" };
 const FM = { fontFamily: "'IBM Plex Mono', 'Courier New', monospace" };
@@ -360,6 +361,7 @@ export default function GameDetail({
   const [savingNote, setSavingNote] = useState(false);
   const [topk, setTopk] = useState(null);
   const [topkErr, setTopkErr] = useState(null);
+  const [sideBets, setSideBets] = useState([]);
   const panelRef = useRef(null);
 
   useEffect(() => {
@@ -367,6 +369,8 @@ export default function GameDetail({
     loadSeason(season).then((c) => { if (live) setCtx(c); }).catch((e) => { if (live) setCtxErr(e.message); });
     sbFetch(`user_picks?select=id,note,created_at&game_id=eq.${game.id}&played=eq.false&order=created_at.desc`)
       .then((r) => { if (live) setNotes(r.filter((n) => n.note)); }).catch(() => { if (live) setNotes([]); });
+    sbFetch(`research_side_bets?select=*&game_id=eq.${game.id}&order=created_at.asc`)
+      .then((r) => { if (live) setSideBets(r); }).catch(() => { if (live) setSideBets([]); });
     if (signal) {
       sbRpc('cfb_topk_detail', { p_game_id: game.id })
         .then((rows) => { if (live) setTopk(rows.map((r) => ({ ...r, predicted_margin: parseFloat(r.predicted_margin), model_edge: parseFloat(r.model_edge), weight: r.weight != null ? parseFloat(r.weight) : null }))); })
@@ -584,6 +588,23 @@ export default function GameDetail({
                 );
               })}
             </div>
+
+            {/* other bets (not graded) */}
+            {sideBets.length > 0 && (
+              <div style={{ ...box, marginBottom: 12 }}>
+                <div style={h3}>Other bets ({sideBets.length}) <span style={{ ...FM, fontSize: 10.5, color: C.sub, fontWeight: 400, marginLeft: 6 }}>not graded</span></div>
+                {groupSideBets(sideBets).map((grp) => (
+                  <div key={grp.key} style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap', padding: '6px 0', borderTop: `1px solid ${C.border}` }}>
+                    <span style={{ ...FM, fontSize: 13, fontWeight: 700, color: grp.count >= 2 ? C.green : C.sub, minWidth: 18 }}>{grp.count}</span>
+                    <span style={{ ...FH, fontSize: 13.5, fontWeight: 700 }}>{describeSideBet(grp, teamFor, { withLine: false })}</span>
+                    {grp.opposed && <span style={{ ...FM, fontSize: 10.5, color: C.warn }}>split</span>}
+                    <span style={{ ...FM, fontSize: 11.5, color: C.gold }}>
+                      {grp.rows.map((r) => `${r.source_label || 'Unlabeled'}${r.market === 'moneyline' ? (r.odds != null ? ` ${r.odds > 0 ? '+' : ''}${r.odds}` : '') : r.line != null ? ` ${r.market === 'spread' && r.line > 0 ? '+' : ''}${r.line}` : ''}`).join(' · ')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* number line */}
             <div style={{ ...box, marginBottom: 12 }}>
