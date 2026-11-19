@@ -146,7 +146,7 @@ insert into scout_sources (sport, name, hub_url, sort_order, note) values
   ('cbb', 'Sportsbook Review', 'https://www.sportsbookreview.com/picks/ncaa-basketball/', 50, 'Daily best bets'),
   ('cbb', 'Pickswise', 'https://www.pickswise.com/college-basketball/', 60, 'Daily best bets'),
   ('cbb', 'BetSided', 'https://fansided.com/betsided/', 70, 'Mixed sports listing; the model keeps CBB only'),
-  ('nfl', 'ESPN', 'https://www.espn.com/espn/betting/', 10, 'Weekly best bets'),
+  ('nfl', 'ESPN', 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/news?limit=100', 10, 'ESPN news API (the betting page needs JavaScript)'),
   ('nfl', 'CBS Sports', 'https://www.cbssports.com/nfl/', 20, 'Expert picks and best bets'),
   ('nfl', 'Action Network', 'https://www.actionnetwork.com/nfl', 30, 'Expert picks'),
   ('nfl', 'VSIN', 'https://vsin.com/nfl/', 40, 'Best bets'),

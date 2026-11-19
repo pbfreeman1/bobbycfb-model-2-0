@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { htmlToArticleText } from '../../../../lib/article-import';
 import {
-  extractLinks, buildLinkChoice, chosenArticles, buildScoutExtraction, resolveScoutPicks, slateWindow, callCost,
+  extractLinks, extractJsonLinks, buildLinkChoice, chosenArticles, buildScoutExtraction, resolveScoutPicks, slateWindow, callCost,
 } from '../../../../lib/scout';
 
 export const runtime = 'nodejs';
@@ -18,7 +18,7 @@ const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (
 
 async function fetchPage(url, ms = 12000) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'en-US,en;q=0.9' },
+    headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml,application/json', 'Accept-Language': 'en-US,en;q=0.9' },
     signal: AbortSignal.timeout(ms), cache: 'no-store', redirect: 'follow',
   });
   if (!res.ok) throw new Error(`${new URL(url).hostname} returned ${res.status}`);
@@ -43,6 +43,9 @@ async function askClaude({ model, system, user, tool, maxTokens, ms }) {
   const block = (body.content || []).find((b) => b.type === 'tool_use');
   return { input: block?.input || null, usage: body.usage || null, stop: body.stop_reason || null };
 }
+
+// A page with no readable text (built by JavaScript, or a paywall) is skipped, not an error.
+class SkipJob extends Error {}
 
 const asArray = (v) => {
   if (Array.isArray(v)) return v;
@@ -86,7 +89,12 @@ export async function POST(req) {
         result = { links: 0, chosen: [], note: 'No games on the slate' };
       } else {
         const html = await fetchPage(job.url);
-        const links = extractLinks(html, job.url);
+        let links;
+        if (/^\s*[[{]/.test(html)) {
+          try { links = extractJsonLinks(JSON.parse(html)); } catch { links = []; }
+        } else {
+          links = extractLinks(html, job.url);
+        }
         if (!links.length) throw new Error(`No article links found on the page (${html.length} bytes; it may need JavaScript)`);
         const max = Number(cfg.max_articles_per_source) || 3;
         const model = cfg.model_links || 'claude-haiku-5-5';
@@ -100,7 +108,7 @@ export async function POST(req) {
     } else {
       const html = await fetchPage(job.url);
       const text = htmlToArticleText(html);
-      if (text.length < 800) throw new Error(`Only ${text.length} characters of article text (paywall or JavaScript page)`);
+      if (text.length < 800) throw new SkipJob(`Only ${text.length} characters of text (JavaScript page or paywall)`);
       const model = cfg.model_extract || 'claude-sonnet-5-5';
       const req2 = buildScoutExtraction(text, slate || [], { sport: job.sport, sourceName, window: slateDesc });
       const ans = await askClaude({ model, ...req2, maxTokens: 8000, ms: 42000 });
@@ -117,9 +125,10 @@ export async function POST(req) {
     return Response.json({ ok: true, job_id: job.id, result });
   } catch (e) {
     const msg = String(e?.message || e);
+    const skip = e instanceof SkipJob;
     if (claimed) {
-      try { await supabase.rpc('scout_job_finish', { p_job_id: jobId, p_status: 'error', p_result: null, p_error: msg }); } catch { /* logged by the dispatcher's timeout */ }
+      try { await supabase.rpc('scout_job_finish', { p_job_id: jobId, p_status: skip ? 'skipped' : 'error', p_result: null, p_error: msg }); } catch { /* the dispatcher retries after 4 minutes */ }
     }
-    return Response.json({ ok: false, error: msg }, { status: 500 });
+    return Response.json({ ok: skip, skipped: skip, error: msg }, { status: skip ? 200 : 500 });
   }
 }
