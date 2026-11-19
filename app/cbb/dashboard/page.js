@@ -18,10 +18,16 @@ const SORTS = {
   edge: { label: 'Edge', fn: (a, b) => Math.abs(b.edge ?? 0) - Math.abs(a.edge ?? 0) },
   agree: { label: 'Agreement', fn: (a, b) => (b.vote_share ?? 0) - (a.vote_share ?? 0) },
   spread: { label: 'Tightest', fn: (a, b) => (a.std_dev ?? 99) - (b.std_dev ?? 99) },
+  tip: { label: 'Tip time', fn: (a, b) => String(a.tip_time ?? '9999').localeCompare(String(b.tip_time ?? '9999')) },
   game: { label: 'Matchup', fn: (a, b) => a.home.localeCompare(b.home) },
 };
 
 // Case- and punctuation-insensitive, so "st johns" finds "St. John's".
+// Tip time in ET, from ESPN. Blank when ESPN has no time for the game.
+const fmtTip = (iso) => (iso ? new Date(iso).toLocaleTimeString('en-US', {
+  timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit',
+}) : '—');
+
 const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9 ]/g, '');
 
 const cell = { padding: '9px 10px', borderBottom: `1px solid ${C.border}`, fontSize: 13, whiteSpace: 'nowrap' };
@@ -56,7 +62,7 @@ function TopSpot({ row, n, onOpen }) {
   return (
     <button onClick={onOpen} title="Open the full breakdown" style={{ textAlign: 'left', color: C.text, cursor: 'pointer', background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.green}`, borderRadius: 8, padding: '12px 14px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
-        <span style={{ ...FM, fontSize: 11, color: C.sub }}>#{n}</span>
+        <span style={{ ...FM, fontSize: 11, color: C.sub }}>#{n}{row.tip_time ? ` · ${fmtTip(row.tip_time)}` : ''}</span>
         <ResultTag row={row} />
       </div>
       <div style={{ ...FH, fontSize: 17, fontWeight: 700, margin: '2px 0 2px' }}>
@@ -192,7 +198,7 @@ export default function CbbDashboard() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  {['#', 'Matchup', 'Tier', 'Pick', 'Line', 'Open', 'Model', 'Edge', 'Agree', 'SD', 'Flags', 'Final'].map((h) => (
+                  {['#', 'Tip (ET)', 'Matchup', 'Tier', 'Pick', 'Line', 'Open', 'Model', 'Edge', 'Agree', 'SD', 'Flags', 'Final'].map((h) => (
                     <th key={h} style={head}>{h}</th>
                   ))}
                 </tr>
@@ -201,6 +207,7 @@ export default function CbbDashboard() {
                 {shown.map((r) => (
                     <tr key={r.game_id} onClick={() => setOpen(r.game_id)} style={{ cursor: 'pointer' }} title="Open the full breakdown">
                       <td style={{ ...cell, ...FM, color: C.sub }}>{r.rank_in_day ?? '—'}</td>
+                      <td style={{ ...cell, ...FM, color: C.sub }}>{fmtTip(r.tip_time)}</td>
                       <td style={cell}>{r.road} @ {r.home}{r.neutral ? ' (N)' : ''}</td>
                       <td style={{ ...cell, fontWeight: 700, color: TIER_COLOR[r.tier] || C.sub }}>{r.tier || '—'}</td>
                       <td style={{ ...cell, fontWeight: 600 }}>{r.pick_team ? `${r.pick_team} ${spreadFor(r.pick_side, r.line)}` : '—'}</td>
@@ -218,7 +225,7 @@ export default function CbbDashboard() {
 
                 ))}
                 {shown.length === 0 && (
-                  <tr><td colSpan={12} style={{ ...cell, color: C.sub }}>{teamQuery.trim() ? `No games match “${teamQuery.trim()}”.` : 'No games in this filter.'}</td></tr>
+                  <tr><td colSpan={13} style={{ ...cell, color: C.sub }}>{teamQuery.trim() ? `No games match “${teamQuery.trim()}”.` : 'No games in this filter.'}</td></tr>
                 )}
               </tbody>
             </table>
