@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { htmlToArticleText } from '../../../../lib/article-import';
 import {
-  extractLinks, extractJsonLinks, buildLinkChoice, chosenArticles, buildScoutExtraction, resolveScoutPicks, slateWindow, callCost,
+  extractLinks, extractJsonLinks, dropOffSlateLinks, buildLinkChoice, chosenArticles, buildScoutExtraction, resolveScoutPicks, slateWindow, callCost,
 } from '../../../../lib/scout';
 
 export const runtime = 'nodejs';
@@ -95,7 +95,9 @@ export async function POST(req) {
         } else {
           links = extractLinks(html, job.url);
         }
-        if (!links.length) throw new Error(`No article links found on the page (${html.length} bytes; it may need JavaScript)`);
+        const allLinks = links.length;
+        links = dropOffSlateLinks(links, (slate || []).map((g) => g.game_date));
+        if (!allLinks) throw new Error(`No article links found on the page (${html.length} bytes; it may need JavaScript)`);
         const max = Number(cfg.max_articles_per_source) || 3;
         const model = cfg.model_links || 'claude-haiku-5-5';
         const req1 = buildLinkChoice({ sport: job.sport, sourceName, window: slateDesc, links, max });
@@ -103,7 +105,7 @@ export async function POST(req) {
         const chosen = chosenArticles(asArray(ans.input?.articles), links, max);
         const { data: added, error: aErr } = await supabase.rpc('scout_add_articles', { p_job_id: job.id, p_articles: chosen });
         if (aErr) throw new Error(`add articles: ${aErr.message}`);
-        result = { links: links.length, chosen, ...added, model, usage: ans.usage, cost: callCost(model, ans.usage) };
+        result = { links: allLinks, on_slate: links.length, chosen, ...added, model, usage: ans.usage, cost: callCost(model, ans.usage) };
       }
     } else {
       const html = await fetchPage(job.url);
