@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from 'react';
 import RefreshButton from '../_ui/RefreshButton';
+import ScoutPanel from '../../_scout/ScoutPanel';
 import { C, FH, FM, fmtET, runLog } from '../../../lib/cbb';
 
 const cell = { padding: '8px 10px', borderBottom: `1px solid ${C.border}`, fontSize: 13, whiteSpace: 'nowrap' };
@@ -71,6 +72,9 @@ export default function CbbLog() {
           </table>
         </div>
       )}
+      <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 28, paddingTop: 20 }}>
+        <ScoutPanel sport="cbb" schedule="Scheduled pulls run at 11 AM and 5 PM ET every day." />
+      </div>
     </main>
   );
 }

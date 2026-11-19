@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from 'react';
 import RefreshButton from '../_ui/RefreshButton';
+import ScoutPanel from '../../_scout/ScoutPanel';
 import { C, FH, FM, fmtET, runLog } from '../../../lib/nfl2';
 
 const cell = { padding: '8px 10px', borderBottom: `1px solid ${C.border}`, fontSize: 13, whiteSpace: 'nowrap' };
@@ -73,6 +74,9 @@ export default function NflLog() {
           </table>
         </div>
       )}
+      <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 28, paddingTop: 20 }}>
+        <ScoutPanel sport="nfl" schedule="Scheduled pulls run Thursdays at noon and Sundays at 11 AM ET." />
+      </div>
     </main>
   );
 }
